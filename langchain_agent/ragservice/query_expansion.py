@@ -4,7 +4,7 @@ import json
 from collections.abc import Callable
 from typing import Any, Protocol
 
-from langgraph_agent.llm.client import (
+from langchain_agent.llm.client import (
     LLMClientError,
     chat,
 )

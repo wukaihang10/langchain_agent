@@ -5,14 +5,14 @@ from pathlib import Path
 
 import numpy as np
 
-from langgraph_agent.ragservice.interfaces import (
+from langchain_agent.ragservice.interfaces import (
     DocumentChunker,
     DocumentLoader,
     EmbeddingClient,
     VectorStore,
 )
 
-from langgraph_agent.ragservice.models import Document, IndexBuildResult
+from langchain_agent.ragservice.models import Document, IndexBuildResult
 
 
 class RAGIndexer:

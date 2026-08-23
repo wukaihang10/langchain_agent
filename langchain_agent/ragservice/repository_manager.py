@@ -4,16 +4,16 @@ from pathlib import Path
 from typing import Any
 import json
 
-from langgraph_agent.ragservice.embedding import (
+from langchain_agent.ragservice.embedding import (
     SentenceTransformerEmbeddingClient,
 )
-from langgraph_agent.ragservice.interfaces import EmbeddingClient
-from langgraph_agent.ragservice.python_repository_rag import (
+from langchain_agent.ragservice.interfaces import EmbeddingClient
+from langchain_agent.ragservice.python_repository_rag import (
     PythonRepositoryRAG,
     RetrievalMode,
 )
 
-from langgraph_agent.ragservice.repository_snapshot import (
+from langchain_agent.ragservice.repository_snapshot import (
     RepositoryChangedDuringIndexingError,
 )
 

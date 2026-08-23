@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from langgraph_agent.llm.client import chat
+from langchain_agent.llm.client import chat
 
-from langgraph_agent.ragservice.models import BuiltContext
-from langgraph_agent.ragservice.prompt_builder import Message, RAGPromptBuilder
+from langchain_agent.ragservice.models import BuiltContext
+from langchain_agent.ragservice.prompt_builder import Message, RAGPromptBuilder
 
 ChatFunction = Callable[..., Any]
 

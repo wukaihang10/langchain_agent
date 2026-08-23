@@ -4,8 +4,8 @@ import ast
 import hashlib
 from dataclasses import dataclass
 
-from langgraph_agent.ragservice.chunker import TextChunker
-from langgraph_agent.ragservice.models import Chunk, Document
+from langchain_agent.ragservice.chunker import TextChunker
+from langchain_agent.ragservice.models import Chunk, Document
 
 
 @dataclass(frozen=True)

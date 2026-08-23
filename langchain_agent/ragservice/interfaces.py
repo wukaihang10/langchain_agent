@@ -6,7 +6,7 @@ from typing import Protocol
 import numpy as np
 from numpy.typing import NDArray
 
-from langgraph_agent.ragservice.models import Chunk, Document, SearchResult
+from langchain_agent.ragservice.models import Chunk, Document, SearchResult
 
 FloatVector = NDArray[np.float32]
 FloatMatrix = NDArray[np.float32]

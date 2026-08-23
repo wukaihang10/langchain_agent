@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from langgraph_agent.ragservice.models import BuiltContext
+from langchain_agent.ragservice.models import BuiltContext
 
 Message = dict[str, Any]
 

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from langgraph_agent.ragservice.interfaces import (
+from langchain_agent.ragservice.interfaces import (
     EmbeddingClient,
     VectorStore,
 )
 
 
-from langgraph_agent.ragservice.models import SearchResult
+from langchain_agent.ragservice.models import SearchResult
 
 
 class VectorRetriever:

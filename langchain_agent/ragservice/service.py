@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from langgraph_agent.ragservice.context_builder import ContextBuilder
-from langgraph_agent.ragservice.generator import RAGGenerator
-from langgraph_agent.ragservice.models import (
+from langchain_agent.ragservice.context_builder import ContextBuilder
+from langchain_agent.ragservice.generator import RAGGenerator
+from langchain_agent.ragservice.models import (
     RAGAnswer,
     RAGSearchResponse,
 )
-from langgraph_agent.ragservice.interfaces import Retriever
+from langchain_agent.ragservice.interfaces import Retriever
 
 
 class NaiveRAG:

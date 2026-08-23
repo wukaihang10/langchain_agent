@@ -1,4 +1,4 @@
-from langgraph_agent.ragservice.prompt_builder import (
+from langchain_agent.ragservice.prompt_builder import (
     RAGPromptBuilder,
 )
 

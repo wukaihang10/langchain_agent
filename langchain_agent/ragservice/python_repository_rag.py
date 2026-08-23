@@ -3,68 +3,68 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from langgraph_agent.ragservice.interfaces import EmbeddingClient
+from langchain_agent.ragservice.interfaces import EmbeddingClient
 
-from langgraph_agent.ragservice.code_prompt_builder import (
+from langchain_agent.ragservice.code_prompt_builder import (
     CodeRAGPromptBuilder,
 )
-from langgraph_agent.ragservice.context_builder import ContextBuilder
-from langgraph_agent.ragservice.embedding import (
+from langchain_agent.ragservice.context_builder import ContextBuilder
+from langchain_agent.ragservice.embedding import (
     SentenceTransformerEmbeddingClient,
 )
-from langgraph_agent.ragservice.generator import RAGGenerator
-from langgraph_agent.ragservice.indexer import RAGIndexer
-from langgraph_agent.ragservice.models import (
+from langchain_agent.ragservice.generator import RAGGenerator
+from langchain_agent.ragservice.indexer import RAGIndexer
+from langchain_agent.ragservice.models import (
     IndexBuildResult,
     IndexReadyResult,
     RAGAnswer,
     RAGSearchResponse,
 )
-from langgraph_agent.ragservice.python_chunker import (
+from langchain_agent.ragservice.python_chunker import (
     PythonASTChunker,
 )
-from langgraph_agent.ragservice.python_loader import (
+from langchain_agent.ragservice.python_loader import (
     PythonDocumentLoader,
 )
-from langgraph_agent.ragservice.retriever import VectorRetriever
-from langgraph_agent.ragservice.service import NaiveRAG
-from langgraph_agent.ragservice.vector_store import (
+from langchain_agent.ragservice.retriever import VectorRetriever
+from langchain_agent.ragservice.service import NaiveRAG
+from langchain_agent.ragservice.vector_store import (
     InMemoryVectorStore,
 )
 
-from langgraph_agent.ragservice.index_storage import (
+from langchain_agent.ragservice.index_storage import (
     IndexCompatibilityError,
     IndexCorruptionError,
     RAGIndexStorage,
 )
 
-from langgraph_agent.ragservice.repository_snapshot import (
+from langchain_agent.ragservice.repository_snapshot import (
     RepositoryChangedDuringIndexingError,
     RepositorySnapshot,
     RepositorySnapshotBuilder,
     describe_repository_changes,
 )
 
-from langgraph_agent.ragservice.bm25 import (
+from langchain_agent.ragservice.bm25 import (
     BM25Retriever,
     InMemoryBM25Index,
 )
-from langgraph_agent.ragservice.code_tokenizer import (
+from langchain_agent.ragservice.code_tokenizer import (
     CodeTokenizer,
 )
-from langgraph_agent.ragservice.hybrid_retriever import (
+from langchain_agent.ragservice.hybrid_retriever import (
     HybridRetriever,
 )
 
-from langgraph_agent.ragservice.query_expansion import (
+from langchain_agent.ragservice.query_expansion import (
     LLMQueryExpander,
 )
 
-from langgraph_agent.ragservice.multi_query_retriever import (
+from langchain_agent.ragservice.multi_query_retriever import (
     MultiQueryRetriever,
 )
 
-from langgraph_agent.ragservice.reranker import (
+from langchain_agent.ragservice.reranker import (
     CrossEncoderReranker,
     RerankingRetriever,
 )

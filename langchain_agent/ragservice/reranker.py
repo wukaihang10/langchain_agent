@@ -7,11 +7,11 @@ from sentence_transformers import (
     CrossEncoder,
 )
 
-from langgraph_agent.ragservice.interfaces import (
+from langchain_agent.ragservice.interfaces import (
     Reranker,
     Retriever,
 )
-from langgraph_agent.ragservice.models import (
+from langchain_agent.ragservice.models import (
     Chunk,
     SearchResult,
 )

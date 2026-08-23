@@ -1,5 +1,5 @@
-from langgraph_agent.ragservice.loader import TextDocumentLoader
-from langgraph_agent.ragservice.models import (
+from langchain_agent.ragservice.loader import TextDocumentLoader
+from langchain_agent.ragservice.models import (
     Chunk,
     Document,
     SearchResult,
@@ -9,29 +9,29 @@ from langgraph_agent.ragservice.models import (
     IndexBuildResult,
     RAGSearchResponse,
 )
-from langgraph_agent.ragservice.chunker import TextChunker
-from langgraph_agent.ragservice.embedding import SentenceTransformerEmbeddingClient
-from langgraph_agent.ragservice.vector_store import InMemoryVectorStore
-from langgraph_agent.ragservice.retriever import VectorRetriever
-from langgraph_agent.ragservice.context_builder import ContextBuilder
-from langgraph_agent.ragservice.prompt_builder import RAGPromptBuilder
-from langgraph_agent.ragservice.generator import RAGGenerator
-from langgraph_agent.ragservice.service import NaiveRAG
-from langgraph_agent.ragservice.indexer import RAGIndexer
-from langgraph_agent.ragservice.python_chunker import PythonASTChunker
-from langgraph_agent.ragservice.python_loader import PythonDocumentLoader
+from langchain_agent.ragservice.chunker import TextChunker
+from langchain_agent.ragservice.embedding import SentenceTransformerEmbeddingClient
+from langchain_agent.ragservice.vector_store import InMemoryVectorStore
+from langchain_agent.ragservice.retriever import VectorRetriever
+from langchain_agent.ragservice.context_builder import ContextBuilder
+from langchain_agent.ragservice.prompt_builder import RAGPromptBuilder
+from langchain_agent.ragservice.generator import RAGGenerator
+from langchain_agent.ragservice.service import NaiveRAG
+from langchain_agent.ragservice.indexer import RAGIndexer
+from langchain_agent.ragservice.python_chunker import PythonASTChunker
+from langchain_agent.ragservice.python_loader import PythonDocumentLoader
 
-from langgraph_agent.ragservice.code_prompt_builder import (
+from langchain_agent.ragservice.code_prompt_builder import (
     CodeRAGPromptBuilder,
 )
-from langgraph_agent.ragservice.python_repository_rag import (
+from langchain_agent.ragservice.python_repository_rag import (
     PythonRepositoryRAG,
 )
-from langgraph_agent.ragservice.repository_manager import (
+from langchain_agent.ragservice.repository_manager import (
     RepositoryKnowledgeManager,
 )
 
-from langgraph_agent.ragservice.index_storage import (
+from langchain_agent.ragservice.index_storage import (
     IndexCompatibilityError,
     IndexCorruptionError,
     IndexStorageError,
@@ -39,12 +39,12 @@ from langgraph_agent.ragservice.index_storage import (
     RAGIndexStorage,
 )
 
-from langgraph_agent.ragservice.code_tokenizer import CodeTokenizer
-from langgraph_agent.ragservice.bm25 import (
+from langchain_agent.ragservice.code_tokenizer import CodeTokenizer
+from langchain_agent.ragservice.bm25 import (
     BM25Retriever,
     InMemoryBM25Index,
 )
-from langgraph_agent.ragservice.hybrid_retriever import (
+from langchain_agent.ragservice.hybrid_retriever import (
     HybridRetriever,
 )
 

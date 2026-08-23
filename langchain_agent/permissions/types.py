@@ -26,11 +26,6 @@ class PermissionAction(StrEnum):
     DENY = "deny"
 
 
-class ToolExecutionAction(StrEnum):
-    APPROVE = "approve"
-    REJECT = "reject"
-
-
 @dataclass(frozen=True)
 class ToolPolicy:
     category: ToolCategory
@@ -43,9 +38,3 @@ class ToolPolicy:
 class PermissionDecision:
     action: PermissionAction
     reason: str | None = None
-
-
-@dataclass
-class ToolExecutionDecision:
-    type: ToolExecutionAction
-    message: str | None = None

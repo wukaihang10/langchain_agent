@@ -5,7 +5,7 @@ from collections.abc import Iterable, Sequence
 import numpy as np
 from numpy.typing import NDArray
 
-from langgraph_agent.ragservice.models import Chunk, SearchResult
+from langchain_agent.ragservice.models import Chunk, SearchResult
 
 FloatVector = NDArray[np.float32]
 FloatMatrix = NDArray[np.float32]

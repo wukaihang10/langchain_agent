@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from langgraph_agent.ragservice.models import (
+from langchain_agent.ragservice.models import (
     BuiltContext,
     ContextItem,
     SearchResult,

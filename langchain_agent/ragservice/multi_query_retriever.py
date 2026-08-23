@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import math
 
-from langgraph_agent.ragservice.interfaces import Retriever
-from langgraph_agent.ragservice.models import (
+from langchain_agent.ragservice.interfaces import Retriever
+from langchain_agent.ragservice.models import (
     Chunk,
     SearchResult,
 )
-from langgraph_agent.ragservice.query_expansion import (
+from langchain_agent.ragservice.query_expansion import (
     QueryExpander,
     QueryExpansionError,
 )
