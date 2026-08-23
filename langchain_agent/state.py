@@ -1,8 +1,6 @@
-from typing import NotRequired, TypedDict, Literal
+from typing import NotRequired, TypedDict
 
-from langgraph.graph import MessagesState
-from langchain.agents.middleware.todo import Todo
-from langchain.messages import AnyMessage
+from langchain.agents.middleware import AgentState
 
 
 class FileEdition(TypedDict):
@@ -11,7 +9,6 @@ class FileEdition(TypedDict):
     old_path: NotRequired[str]
 
 
-class AgentState(MessagesState):
-    todos: NotRequired[list[Todo]]
+class GitAuditState(AgentState):
     edited_file_list: NotRequired[list[str]]
     edition_list: NotRequired[list[FileEdition]]

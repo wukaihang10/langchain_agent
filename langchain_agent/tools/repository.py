@@ -4,7 +4,6 @@ from collections import Counter
 
 from langchain.tools import tool, ToolRuntime
 
-from langchain_agent.state import AgentState
 from langchain_agent.context import AgentContext
 from langchain_agent.permissions.types import ToolCategory, ToolRisk
 
