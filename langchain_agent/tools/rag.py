@@ -28,7 +28,7 @@ def search_repository_knowledge(
             "query": query,
             "top_k": top_k,
         },
-        config=runtime.config,
+        # config=runtime.config,
         context=runtime.context,
     )
 

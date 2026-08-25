@@ -38,7 +38,7 @@ def _run_git(
 
 def collect_file_editions(
     repository_path: str,
-) -> list[FileEdition]:
+):
     output = _run_git(
         repository_path,
         "status",
@@ -48,7 +48,7 @@ def collect_file_editions(
     )
 
     if not output:
-        return []
+        return {}
 
     entries = output.split("\0")
     editions: list[FileEdition] = []
@@ -86,7 +86,42 @@ def collect_file_editions(
 
         index += 1
 
-    return editions
+    return {
+        "edited_file_list": [edition["file_path"] for edition in editions],
+        "edition_list": editions,
+    }
+
+
+def collect_git_diff(
+    repository_path: str,
+    file_path: str | None = None,
+) -> str:
+    args = [
+        "diff",
+        "HEAD",
+        "--",
+    ]
+
+    if file_path is not None:
+        args.append(file_path)
+
+    return _run_git(
+        repository_path,
+        *args,
+    )
+
+
+def collect_untracked_files(
+    repository_path: str,
+) -> list[str]:
+    output = _run_git(
+        repository_path,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+    )
+
+    return [line for line in output.splitlines() if line]
 
 
 def _parse_change_type(
@@ -122,10 +157,10 @@ def _parse_change_type(
 def ensure_clean_worktree(
     repository_path: str,
 ) -> None:
-    editions = collect_file_editions(repository_path)
+    audit = collect_file_editions(repository_path)
 
-    if editions:
-        changed_files = ", ".join(edition["file_path"] for edition in editions)
+    if audit:
+        changed_files = ", ".join(audit.get("edited_file_list"))
 
         raise RuntimeError(
             "Repository worktree must be clean "
@@ -150,6 +185,6 @@ class GitAuditMiddleware(
         audit = collect_file_editions(runtime.context.repository_path)
 
         return {
-            "edited_file_list": (audit.edited_file_list),
-            "edition_list": (audit.edition_list),
+            "edited_file_list": audit.get("edited_file_list", []),
+            "edition_list": audit.get("edition_list", []),
         }

@@ -15,6 +15,8 @@ from langchain.agents.middleware import (
     SummarizationMiddleware,
     TodoListMiddleware,
 )
+from deepagents.backends import StateBackend
+from deepagents.middleware import SubAgentMiddleware
 
 from langchain_agent.model import create_model
 from langchain_agent.context import AgentContext
@@ -30,6 +32,8 @@ from langchain_agent.permissions.middleware import (
     PermissionEnforcementMiddleware,
     build_hitl_middleware,
 )
+from langchain_agent.subagents.code_researcher import build_code_researcher
+from langchain_agent.subagents.code_reviewer import build_code_reviewer
 
 AGENT_DIR = Path(".agent")
 CHECKPOINT_PATH = AGENT_DIR / "checkpoints.sqlite"
@@ -85,7 +89,7 @@ def collect_hitl_decisions(interrupts) -> list[dict]:
 
             print(
                 "Arguments:",
-                action["arguments"],
+                action["args"],
             )
 
             description = action.get("description")
@@ -447,6 +451,31 @@ async def main():
         # MiddleWare config
         #
 
+        code_researcher = build_code_researcher(create_model())
+        code_reviewer = build_code_reviewer(create_model())
+
+        subagent_middleware = SubAgentMiddleware(
+            backend=StateBackend(),
+            subagents=[
+                code_researcher,
+                code_reviewer,
+            ],
+            system_prompt="""
+                Use subagents proactively when their specialization matches the task.
+
+                Delegation policy:
+                - For complex, multi-step, read-only repository investigation spanning
+                multiple files, symbols, or modules, delegate to code-researcher.
+                - For review of an existing change set, working tree, git diff, or recently
+                modified code, delegate to code-reviewer.
+                - Use repository tools directly for simple, targeted lookups that normally
+                require only one or two tool calls, such as reading a known file or locating
+                a known symbol.
+                - After a subagent returns, use direct tools only when targeted verification
+                or follow-up is still needed.
+                """.strip(),
+        )
+
         hitl_middleware = build_hitl_middleware(
             tools=tools,
             registry=policy_registry,
@@ -463,6 +492,7 @@ async def main():
         middleware = [
             hitl_middleware,
             TodoListMiddleware(),
+            subagent_middleware,
             SummarizationMiddleware(
                 model=summary_model,
                 trigger=("tokens", 30_000),
