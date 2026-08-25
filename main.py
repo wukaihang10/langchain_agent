@@ -5,6 +5,8 @@ import asyncio
 import json
 import sys
 from pathlib import Path
+from prompt_toolkit import PromptSession
+from prompt_toolkit.key_binding import KeyBindings
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -41,6 +43,19 @@ SESSION_PATH = AGENT_DIR / "sessions.json"
 MCP_CONFIG_PATH = Path(".agent") / "mcp.json"
 
 NATIVE_TOOLS = [*REPOSITORY_TOOLS, search_repository_knowledge]
+
+
+kb = KeyBindings()
+
+
+@kb.add("c-l")
+def clear_screen(event):
+    event.app.renderer.clear()
+
+
+session = PromptSession(
+    key_bindings=kb,
+)
 
 
 def parse_args():
@@ -534,7 +549,9 @@ async def main():
                 else:
                     prompt = f"\n[{active_session.name}] You> "
 
-                user_input = input(prompt).strip()
+                user_input = await session.prompt_async(prompt)
+
+                user_input = user_input.strip()
 
             except (
                 EOFError,
@@ -709,7 +726,7 @@ async def main():
                     and target_session.thread_id == active_session.thread_id
                 )
 
-                deleted = delete_session(
+                deleted = await delete_session(
                     session=target_session,
                     session_store=session_store,
                     checkpointer=checkpointer,
