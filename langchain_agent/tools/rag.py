@@ -4,7 +4,13 @@ from langchain.tools import ToolRuntime, tool
 from pydantic import Field, StringConstraints
 
 from langchain_agent.context import AgentContext
-from langchain_agent.rag.graph import rag_graph
+from langchain_agent.repository_knowledge import SearchResponse
+
+
+def format_search_response_for_agent(response: SearchResponse) -> str:
+    """Render structured repository evidence for the model context."""
+
+    return response.context
 
 
 @tool
@@ -26,16 +32,17 @@ def search_repository_knowledge(
     source content is needed.
     """
 
-    result = rag_graph.invoke(
-        {
-            "query": query,
-            "top_k": top_k,
-        },
-        # config=runtime.config,
-        context=runtime.context,
+    repository_knowledge = runtime.context.repository_knowledge
+
+    if not repository_knowledge.is_ready:
+        repository_knowledge.prepare()
+
+    response = repository_knowledge.search(
+        query,
+        top_k=top_k,
     )
 
-    return result["context"]
+    return format_search_response_for_agent(response)
 
 
 search_repository_knowledge.metadata = {

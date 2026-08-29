@@ -8,8 +8,7 @@ from langchain_core.language_models.fake_chat_models import (
 )
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from langchain_agent.rag.graph import ensure_index_node
-from langchain_agent.ragservice.errors import (
+from langchain_agent.repository_knowledge import (
     RepositoryChangedDuringIndexingError,
     RepositoryKnowledgeError,
 )
@@ -51,32 +50,65 @@ class ToolInputSchemaTests(unittest.TestCase):
                 )
 
 
-class RAGGraphErrorPropagationTests(unittest.TestCase):
-    def test_expected_index_error_bubbles_out_of_graph_node(self) -> None:
+class RepositoryKnowledgeToolTests(unittest.TestCase):
+    def test_tool_prepares_service_before_first_search(self) -> None:
+        class FakeRepositoryKnowledge:
+            is_ready = False
+
+            def __init__(self) -> None:
+                self.prepare_count = 0
+                self.search_calls = []
+
+            def prepare(self) -> None:
+                self.prepare_count += 1
+                self.is_ready = True
+
+            def search(self, query: str, *, top_k: int):
+                self.search_calls.append((query, top_k))
+                return SimpleNamespace(context="repository evidence")
+
+        repository_knowledge = FakeRepositoryKnowledge()
+        runtime = SimpleNamespace(
+            context=SimpleNamespace(
+                repository_knowledge=repository_knowledge,
+            )
+        )
+
+        result = search_repository_knowledge.func(
+            query="permission middleware",
+            runtime=runtime,
+            top_k=7,
+        )
+
+        self.assertEqual(result, "repository evidence")
+        self.assertEqual(repository_knowledge.prepare_count, 1)
+        self.assertEqual(
+            repository_knowledge.search_calls,
+            [("permission middleware", 7)],
+        )
+
+    def test_expected_prepare_error_bubbles_out_of_tool(self) -> None:
         expected_error = RepositoryChangedDuringIndexingError(
             "repository kept changing"
         )
 
-        class FailingManager:
-            is_indexed = False
+        class FailingRepositoryKnowledge:
+            is_ready = False
 
-            def index_repository_knowledge(self, repository_path: str) -> None:
+            def prepare(self) -> None:
                 raise expected_error
 
         runtime = SimpleNamespace(
             context=SimpleNamespace(
-                rag_manager=FailingManager(),
-                repository_path="repository",
+                repository_knowledge=FailingRepositoryKnowledge(),
             )
         )
 
         with self.assertRaises(RepositoryChangedDuringIndexingError) as raised:
-            ensure_index_node(
-                {
-                    "query": "permission middleware",
-                    "top_k": 5,
-                },
-                runtime,
+            search_repository_knowledge.func(
+                query="permission middleware",
+                runtime=runtime,
+                top_k=5,
             )
 
         self.assertIs(raised.exception, expected_error)

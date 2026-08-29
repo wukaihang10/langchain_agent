@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
 import numpy as np
-from sentence_transformers import (
-    CrossEncoder,
-)
+
+if TYPE_CHECKING:
+    from sentence_transformers import CrossEncoder
 
 from langchain_agent.ragservice.interfaces import (
     Reranker,
@@ -140,6 +141,8 @@ class CrossEncoderReranker:
         self,
     ) -> CrossEncoder:
         if self._model is None:
+            from sentence_transformers import CrossEncoder
+
             self._model = CrossEncoder(
                 model_name_or_path=(self.model_name),
                 max_length=self.max_length,

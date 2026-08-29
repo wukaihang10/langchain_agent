@@ -1,12 +1,11 @@
 from dataclasses import dataclass
 
-from langchain_agent.ragservice.repository_manager import RepositoryKnowledgeManager
-
 from langchain_agent.permissions.types import PermissionMode
+from langchain_agent.repository_knowledge import RepositoryKnowledgeService
 
 
 @dataclass(frozen=True)
 class AgentContext:
     repository_path: str
-    rag_manager: RepositoryKnowledgeManager
+    repository_knowledge: RepositoryKnowledgeService
     permission_mode: PermissionMode = PermissionMode.DEFAULT

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import NDArray
-from sentence_transformers import SentenceTransformer
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 FloatVector = NDArray[np.float32]
 FloatMatrix = NDArray[np.float32]
@@ -48,20 +51,27 @@ class SentenceTransformerEmbeddingClient:
         self.batch_size = batch_size
         self.normalize_embeddings = normalize_embeddings
         self.show_progress_bar = show_progress_bar
+        self.device = device
+        self._model: SentenceTransformer | None = None
+        self._dimension: int | None = None
 
-        self.model = SentenceTransformer(
-            model_name,
-            device=device,
-        )
+    @property
+    def model_id(self) -> str:
+        return self.model_name
 
-        dimension = self.model.get_embedding_dimension()
+    @property
+    def dimension(self) -> int:
+        if self._dimension is None:
+            dimension = self._get_model().get_embedding_dimension()
 
-        if dimension is None:
-            raise ValueError(
-                "The embedding model did not provide an embedding dimension"
-            )
+            if dimension is None:
+                raise ValueError(
+                    "The embedding model did not provide an embedding dimension"
+                )
 
-        self.dimension = int(dimension)
+            self._dimension = int(dimension)
+
+        return self._dimension
 
     def embed_documents(
         self,
@@ -113,7 +123,7 @@ class SentenceTransformerEmbeddingClient:
         self,
         texts: Sequence[str],
     ) -> FloatMatrix:
-        embeddings = self.model.encode(
+        embeddings = self._get_model().encode(
             list(texts),
             batch_size=self.batch_size,
             show_progress_bar=self.show_progress_bar,
@@ -138,6 +148,17 @@ class SentenceTransformerEmbeddingClient:
             )
 
         return matrix
+
+    def _get_model(self) -> SentenceTransformer:
+        if self._model is None:
+            from sentence_transformers import SentenceTransformer
+
+            self._model = SentenceTransformer(
+                self.model_name,
+                device=self.device,
+            )
+
+        return self._model
 
     def _build_query_input(
         self,

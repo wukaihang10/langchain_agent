@@ -1,6 +1,11 @@
-class RepositoryKnowledgeError(RuntimeError):
-    """Expected repository-knowledge failure that is safe to show to the agent."""
+"""Compatibility imports for the former repository-knowledge package."""
 
+from langchain_agent.repository_knowledge.errors import (
+    RepositoryChangedDuringIndexingError,
+    RepositoryKnowledgeError,
+)
 
-class RepositoryChangedDuringIndexingError(RepositoryKnowledgeError):
-    """The repository kept changing while a stable index was being built."""
+__all__ = [
+    "RepositoryChangedDuringIndexingError",
+    "RepositoryKnowledgeError",
+]

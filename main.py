@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
@@ -30,7 +31,12 @@ from langchain_agent.tool_retry import (
 )
 from langchain_agent.tools.repository import REPOSITORY_TOOLS
 from langchain_agent.tools.rag import search_repository_knowledge
-from langchain_agent.ragservice.repository_manager import RepositoryKnowledgeManager
+from langchain_agent.ragservice.embedding import SentenceTransformerEmbeddingClient
+from langchain_agent.repository_knowledge import (
+    RepositoryKnowledgeConfig,
+    RepositoryKnowledgeService,
+)
+from langchain_agent.repository_knowledge.cache import repository_cache_key
 from langchain_agent.permissions.types import PermissionMode
 from langchain_agent.session import Session, SessionStore
 from langchain_agent.mcp_config import load_mcp_config
@@ -46,6 +52,7 @@ AGENT_DIR = Path(".agent")
 CHECKPOINT_PATH = AGENT_DIR / "checkpoints.sqlite"
 SESSION_PATH = AGENT_DIR / "sessions.json"
 MCP_CONFIG_PATH = Path(".agent") / "mcp.json"
+INDEX_ROOT = AGENT_DIR / "indexes"
 
 NATIVE_TOOLS = [*REPOSITORY_TOOLS, search_repository_knowledge]
 
@@ -56,11 +63,6 @@ kb = KeyBindings()
 @kb.add("c-l")
 def clear_screen(event):
     event.app.renderer.clear()
-
-
-session = PromptSession(
-    key_bindings=kb,
-)
 
 
 def parse_args():
@@ -376,19 +378,20 @@ def build_session_runtime(
     session: Session,
     session_store: SessionStore,
     permission_mode: PermissionMode,
+    repository_knowledge_factory: Callable[
+        [Path],
+        RepositoryKnowledgeService,
+    ],
 ) -> tuple[AgentContext, dict]:
     repository_path = resolve_repository_path(
         session=session,
         session_store=session_store,
     )
-
-    rag_manager = RepositoryKnowledgeManager(
-        retrieval_mode="fast",
-    )
+    repository_knowledge = repository_knowledge_factory(repository_path)
 
     context = AgentContext(
         repository_path=str(repository_path),
-        rag_manager=rag_manager,
+        repository_knowledge=repository_knowledge,
         permission_mode=permission_mode,
     )
 
@@ -418,6 +421,7 @@ def build_session_runtime(
 
 async def main():
     args = parse_args()
+    prompt_session = PromptSession(key_bindings=kb)
 
     permission_mode = PermissionMode(args.permission_mode)
 
@@ -431,6 +435,35 @@ async def main():
     )
 
     session_store = SessionStore(SESSION_PATH)
+
+    embedding_client: SentenceTransformerEmbeddingClient | None = None
+    repository_services: dict[Path, RepositoryKnowledgeService] = {}
+
+    def get_repository_knowledge(
+        repository_path: Path,
+    ) -> RepositoryKnowledgeService:
+        nonlocal embedding_client
+
+        resolved_path = repository_path.resolve()
+        existing_service = repository_services.get(resolved_path)
+
+        if existing_service is not None:
+            return existing_service
+
+        if embedding_client is None:
+            embedding_client = SentenceTransformerEmbeddingClient(
+                model_name="BAAI/bge-small-zh-v1.5",
+            )
+
+        service = RepositoryKnowledgeService(
+            repository_path=resolved_path,
+            index_path=(INDEX_ROOT / repository_cache_key(resolved_path)),
+            embedding_client=embedding_client,
+            config=RepositoryKnowledgeConfig(retrieval_mode="fast"),
+        )
+        repository_services[resolved_path] = service
+
+        return service
 
     active_session: Session | None = None
     context: AgentContext | None = None
@@ -574,7 +607,7 @@ async def main():
                 else:
                     prompt = f"\n[{active_session.name}] You> "
 
-                user_input = await session.prompt_async(prompt)
+                user_input = await prompt_session.prompt_async(prompt)
 
                 user_input = user_input.strip()
 
@@ -639,6 +672,7 @@ async def main():
                     session=new_session,
                     session_store=session_store,
                     permission_mode=permission_mode,
+                    repository_knowledge_factory=get_repository_knowledge,
                 )
 
                 active_session = new_session
@@ -677,6 +711,7 @@ async def main():
                     session=selected_session,
                     session_store=session_store,
                     permission_mode=permission_mode,
+                    repository_knowledge_factory=get_repository_knowledge,
                 )
 
                 active_session = selected_session

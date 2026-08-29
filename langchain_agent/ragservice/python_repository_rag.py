@@ -60,6 +60,7 @@ from langchain_agent.ragservice.hybrid_retriever import (
 
 from langchain_agent.ragservice.query_expansion import (
     LLMQueryExpander,
+    QueryExpander,
 )
 
 from langchain_agent.ragservice.multi_query_retriever import (
@@ -100,6 +101,7 @@ class PythonRepositoryRAG:
         show_progress_bar: bool = False,
         device: str | None = None,
         retrieval_mode: RetrievalMode = "fast",
+        query_expander: QueryExpander | None = None,
     ) -> None:
         self.repository_path = Path(repository_path).resolve()
 
@@ -147,8 +149,12 @@ class PythonRepositoryRAG:
             self.embedding_model_id = str(
                 getattr(
                     embedding_client,
-                    "model_name",
-                    type(embedding_client).__qualname__,
+                    "model_id",
+                    getattr(
+                        embedding_client,
+                        "model_name",
+                        type(embedding_client).__qualname__,
+                    ),
                 )
             )
 
@@ -185,7 +191,11 @@ class PythonRepositoryRAG:
             candidate_multiplier=3,
         )
 
-        self.query_expander = LLMQueryExpander(max_rewrites=2)
+        self.query_expander = (
+            query_expander
+            if query_expander is not None
+            else LLMQueryExpander(max_rewrites=2)
+        )
 
         self.multi_query_retriever = MultiQueryRetriever(
             base_retriever=(self.hybrid_retriever),

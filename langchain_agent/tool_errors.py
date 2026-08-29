@@ -5,7 +5,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
-from langchain_agent.ragservice.errors import RepositoryKnowledgeError
+from langchain_agent.repository_knowledge import RepositoryKnowledgeError
 from langchain_agent.tools.errors import RepositoryToolError
 
 AsyncToolHandler = Callable[
