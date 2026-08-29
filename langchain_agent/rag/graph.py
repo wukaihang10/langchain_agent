@@ -1,5 +1,3 @@
-from typing import Literal
-
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 
@@ -14,30 +12,11 @@ def ensure_index_node(
     manager = runtime.context.rag_manager
 
     if manager.is_indexed:
-        return {
-            "index_ready": True,
-        }
+        return {}
 
-    result = manager.index_repository_knowledge(runtime.context.repository_path)
+    manager.index_repository_knowledge(runtime.context.repository_path)
 
-    if not result["success"]:
-        return {
-            "index_ready": False,
-            "error": result["error"],
-        }
-
-    return {
-        "index_ready": True,
-    }
-
-
-def route_after_index(
-    state: RAGState,
-) -> Literal["candidate_retrieve", "__end__"]:
-    if state["index_ready"]:
-        return "candidate_retrieve"
-
-    return END
+    return {}
 
 
 def candidate_retrieve_node(
@@ -134,9 +113,9 @@ def build_rag_graph():
         "ensure_index",
     )
 
-    builder.add_conditional_edges(
+    builder.add_edge(
         "ensure_index",
-        route_after_index,
+        "candidate_retrieve",
     )
 
     builder.add_edge(

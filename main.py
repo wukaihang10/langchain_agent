@@ -23,6 +23,11 @@ from deepagents.middleware import SubAgentMiddleware
 from langchain_agent.model import create_model
 from langchain_agent.context import AgentContext
 from langchain_agent.git_changes import GitAuditMiddleware
+from langchain_agent.tool_errors import ToolErrorMiddleware
+from langchain_agent.tool_retry import (
+    build_mcp_no_retry_failure_middleware,
+    build_mcp_retry_middleware,
+)
 from langchain_agent.tools.repository import REPOSITORY_TOOLS
 from langchain_agent.tools.rag import search_repository_knowledge
 from langchain_agent.ragservice.repository_manager import RepositoryKnowledgeManager
@@ -461,6 +466,15 @@ async def main():
         external_policy_overrides=mcp_config.tool_policies,
     )
 
+    mcp_retry_middleware = build_mcp_retry_middleware(
+        mcp_tools=mcp_tools,
+        policy_registry=policy_registry,
+    )
+    mcp_no_retry_failure_middleware = build_mcp_no_retry_failure_middleware(
+        mcp_tools=mcp_tools,
+        policy_registry=policy_registry,
+    )
+
     async with AsyncSqliteSaver.from_conn_string(str(CHECKPOINT_PATH)) as checkpointer:
         #
         # MiddleWare config
@@ -514,6 +528,17 @@ async def main():
                 keep=("tokens", 8_000),
             ),
             permission_enforcement_middleware,
+            *(
+                [mcp_retry_middleware]
+                if mcp_retry_middleware is not None
+                else []
+            ),
+            *(
+                [mcp_no_retry_failure_middleware]
+                if mcp_no_retry_failure_middleware is not None
+                else []
+            ),
+            ToolErrorMiddleware(),
             GitAuditMiddleware(),
         ]
 

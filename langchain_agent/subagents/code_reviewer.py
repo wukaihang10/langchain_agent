@@ -1,5 +1,6 @@
 from langchain_core.language_models import BaseChatModel
 
+from langchain_agent.tool_errors import ToolErrorMiddleware
 from langchain_agent.tools.git_diff import get_git_diff
 from langchain_agent.tools.repository import (
     read_file,
@@ -74,4 +75,5 @@ def build_code_reviewer(model: BaseChatModel):
             search_code,
             search_repository_knowledge,
         ],
+        "middleware": [ToolErrorMiddleware()],
     }

@@ -7,14 +7,11 @@ import json
 from langchain_agent.ragservice.embedding import (
     SentenceTransformerEmbeddingClient,
 )
+from langchain_agent.ragservice.errors import RepositoryKnowledgeError
 from langchain_agent.ragservice.interfaces import EmbeddingClient
 from langchain_agent.ragservice.python_repository_rag import (
     PythonRepositoryRAG,
     RetrievalMode,
-)
-
-from langchain_agent.ragservice.repository_snapshot import (
-    RepositoryChangedDuringIndexingError,
 )
 
 ToolResult = dict[str, Any]
@@ -99,23 +96,18 @@ class RepositoryKnowledgeManager:
         stripped_path = repository_path.strip()
 
         if not stripped_path:
-            return self._failure(
-                error_type="invalid_repository_path",
-                message=("repository_path cannot be empty"),
-            )
+            raise RepositoryKnowledgeError("repository_path cannot be empty")
 
         resolved_path = Path(stripped_path).resolve()
 
         if not resolved_path.exists():
-            return self._failure(
-                error_type="repository_not_found",
-                message=("Repository does not exist: " f"{resolved_path}"),
+            raise RepositoryKnowledgeError(
+                "Repository does not exist: " f"{resolved_path}"
             )
 
         if not resolved_path.is_dir():
-            return self._failure(
-                error_type="not_a_directory",
-                message=("Repository path is not a directory: " f"{resolved_path}"),
+            raise RepositoryKnowledgeError(
+                "Repository path is not a directory: " f"{resolved_path}"
             )
 
         embedding_client = self._get_embedding_client()
@@ -135,26 +127,16 @@ class RepositoryKnowledgeManager:
 
         index_directory = resolved_path / ".rag_index"
 
-        try:
-            ready_index = candidate_rag.ensure_index(index_directory)
-
-        except RepositoryChangedDuringIndexingError as error:
-            return self._failure(
-                error_type="repository_changed_during_indexing",
-                message=str(error),
-            )
+        ready_index = candidate_rag.ensure_index(index_directory)
 
         index_result = ready_index.index
         index_source = ready_index.source
         rebuild_reason = ready_index.rebuild_reason
 
         if index_result.is_empty:
-            return self._failure(
-                error_type="empty_repository_index",
-                message=(
-                    "No indexable Python code was found "
-                    f"in repository: {resolved_path}"
-                ),
+            raise RepositoryKnowledgeError(
+                "No indexable Python code was found "
+                f"in repository: {resolved_path}"
             )
 
         # 到这里说明候选索引已经完整建立。
@@ -200,30 +182,20 @@ class RepositoryKnowledgeManager:
         stripped_query = query.strip()
 
         if not stripped_query:
-            return self._failure(
-                error_type="invalid_query",
-                message="query cannot be empty",
-            )
+            raise RepositoryKnowledgeError("query cannot be empty")
 
         if not isinstance(top_k, int):
             raise TypeError("top_k must be an integer")
 
         if not 1 <= top_k <= 12:
-            return self._failure(
-                error_type="invalid_top_k",
-                message=("top_k must be between 1 and 12"),
-            )
+            raise RepositoryKnowledgeError("top_k must be between 1 and 12")
 
         repository_rag = self._repository_rag
 
         if repository_rag is None:
-            return self._failure(
-                error_type="repository_not_indexed",
-                message=(
-                    "No repository knowledge index "
-                    "is currently available. Call "
-                    "index_repository_knowledge first."
-                ),
+            raise RepositoryKnowledgeError(
+                "No repository knowledge index is currently available. "
+                "Call index_repository_knowledge first."
             )
 
         search_response = repository_rag.search(
@@ -400,14 +372,3 @@ class RepositoryKnowledgeManager:
             evidence["content_truncated"] = True
 
         return evidence
-
-    @staticmethod
-    def _failure(
-        error_type: str,
-        message: str,
-    ) -> ToolResult:
-        return {
-            "success": False,
-            "error_type": error_type,
-            "error": message,
-        }

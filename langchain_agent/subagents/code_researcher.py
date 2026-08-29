@@ -1,6 +1,7 @@
 from langchain.agents import create_agent
 
 from langchain_agent.context import AgentContext
+from langchain_agent.tool_errors import ToolErrorMiddleware
 from langchain_agent.tools.repository import (
     list_files,
     read_file,
@@ -68,6 +69,7 @@ def build_code_researcher(model):
     runnable = create_agent(
         model=model,
         tools=RESEARCH_TOOLS,
+        middleware=[ToolErrorMiddleware()],
         context_schema=AgentContext,
         system_prompt=CODE_RESEARCHER_PROMPT,
         name="code-researcher",

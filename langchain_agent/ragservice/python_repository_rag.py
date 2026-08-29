@@ -37,9 +37,11 @@ from langchain_agent.ragservice.index_storage import (
     IndexCorruptionError,
     RAGIndexStorage,
 )
+from langchain_agent.ragservice.errors import (
+    RepositoryChangedDuringIndexingError,
+)
 
 from langchain_agent.ragservice.repository_snapshot import (
-    RepositoryChangedDuringIndexingError,
     RepositorySnapshot,
     RepositorySnapshotBuilder,
     describe_repository_changes,

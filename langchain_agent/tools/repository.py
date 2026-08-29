@@ -1,11 +1,14 @@
 import os
-from pathlib import Path
 from collections import Counter
+from pathlib import Path
+from typing import Annotated
 
 from langchain.tools import tool, ToolRuntime
+from pydantic import Field, StringConstraints
 
 from langchain_agent.context import AgentContext
 from langchain_agent.permissions.types import ToolCategory, ToolRisk
+from langchain_agent.tools.errors import RepositoryToolError
 
 MAX_LIST_FILES = 2000
 MAX_READ_CHARS = 10000
@@ -82,6 +85,35 @@ def is_ignored(path: Path) -> bool:
     return any(part in IGNORED_DIRECTORIES for part in path.parts)
 
 
+def resolve_repository_root(repository_path: str) -> Path:
+    root = Path(repository_path).resolve()
+
+    if not root.exists():
+        raise RepositoryToolError(
+            f"Repository path does not exist: {repository_path}"
+        )
+
+    if not root.is_dir():
+        raise RepositoryToolError(
+            f"Repository path is not a directory: {repository_path}"
+        )
+
+    return root
+
+
+def resolve_repository_path(root: Path, file_path: str) -> Path:
+    path = (root / file_path).resolve()
+
+    try:
+        path.relative_to(root)
+    except ValueError as error:
+        raise RepositoryToolError(
+            "File path must stay inside the repository."
+        ) from error
+
+    return path
+
+
 def iter_repository_files(root: Path):
     for current_dir, dirnames, filenames in os.walk(root, followlinks=False):
         current = Path(current_dir)
@@ -110,7 +142,10 @@ def iter_repository_files(root: Path):
 
 
 @tool
-def list_files(runtime: ToolRuntime[AgentContext], max_files: int = 200):
+def list_files(
+    runtime: ToolRuntime[AgentContext],
+    max_files: Annotated[int, Field(ge=1, le=MAX_LIST_FILES)] = 200,
+):
     """List files in the current repository.
 
     Args:
@@ -118,22 +153,7 @@ def list_files(runtime: ToolRuntime[AgentContext], max_files: int = 200):
     """
 
     repo_path = runtime.context.repository_path
-    root = Path(repo_path).resolve()
-
-    if not root.exists():
-        return {"success": False, "error": f"Path does not exist: {repo_path}"}
-
-    if not root.is_dir():
-        return {
-            "success": False,
-            "error": f"Path is not a directory: {repo_path}",
-        }
-
-    if not 1 <= max_files <= MAX_LIST_FILES:
-        return {
-            "success": False,
-            "error": f"max_files must be between 1 and {MAX_LIST_FILES}",
-        }
+    root = resolve_repository_root(repo_path)
 
     files = []
 
@@ -161,10 +181,10 @@ def list_files(runtime: ToolRuntime[AgentContext], max_files: int = 200):
 @tool
 def read_file(
     runtime: ToolRuntime[AgentContext],
-    file_path: str,
-    start_line: int = 1,
-    start_column: int = 0,
-    max_chars: int = MAX_READ_CHARS,
+    file_path: Annotated[str, StringConstraints(min_length=1)],
+    start_line: Annotated[int, Field(ge=1)] = 1,
+    start_column: Annotated[int, Field(ge=0)] = 0,
+    max_chars: Annotated[int, Field(ge=1, le=MAX_READ_CHARS)] = MAX_READ_CHARS,
 ) -> dict:
     """Read source text from a known file in the current repository.
 
@@ -181,71 +201,22 @@ def read_file(
         max_chars: Maximum number of characters to return.
     """
 
-    if not isinstance(start_line, int):
-        raise TypeError("start_line must be an integer")
-
-    if start_line < 1:
-        return {
-            "success": False,
-            "error": "start_line must be >= 1",
-        }
-
-    if not isinstance(start_column, int):
-        raise TypeError("start_column must be an integer")
-
-    if start_column < 0:
-        return {
-            "success": False,
-            "error": "start_column must be >= 0",
-        }
-
-    if not isinstance(max_chars, int):
-        raise TypeError("max_chars must be an integer")
-
-    if not 1 <= max_chars <= MAX_READ_CHARS:
-        return {
-            "success": False,
-            "error": (f"max_chars must be between 1 and " f"{MAX_READ_CHARS}"),
-        }
-
     repo_path = runtime.context.repository_path
-    root = Path(repo_path).resolve()
-
-    if not root.exists() or not root.is_dir():
-        return {
-            "success": False,
-            "error": f"Invalid repository path: {repo_path}",
-        }
-
-    path = (root / file_path).resolve()
-
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return {
-            "success": False,
-            "error": "File path must stay inside the repository.",
-        }
+    root = resolve_repository_root(repo_path)
+    path = resolve_repository_path(root, file_path)
 
     if not path.exists():
-        return {
-            "success": False,
-            "error": f"File does not exist: {file_path}",
-        }
+        raise RepositoryToolError(f"File does not exist: {file_path}")
 
     if not path.is_file():
-        return {
-            "success": False,
-            "error": f"Path is not a file: {file_path}",
-        }
+        raise RepositoryToolError(f"Path is not a file: {file_path}")
 
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as error:
-        return {
-            "success": False,
-            "error": str(error),
-        }
+        raise RepositoryToolError(
+            f"Could not read UTF-8 file {file_path}: {error}"
+        ) from error
 
     lines = text.splitlines(keepends=True)
     total_lines = len(lines)
@@ -253,10 +224,7 @@ def read_file(
     # Empty file.
     if total_lines == 0:
         if start_line != 1 or start_column != 0:
-            return {
-                "success": False,
-                "error": "Read position is outside the empty file.",
-            }
+            raise RepositoryToolError("Read position is outside the empty file.")
 
         return {
             "success": True,
@@ -274,20 +242,16 @@ def read_file(
         }
 
     if start_line > total_lines:
-        return {
-            "success": False,
-            "error": (f"start_line {start_line} exceeds " f"file length {total_lines}"),
-        }
+        raise RepositoryToolError(
+            f"start_line {start_line} exceeds file length {total_lines}"
+        )
 
     start_index = start_line - 1
 
     if start_column > len(lines[start_index]):
-        return {
-            "success": False,
-            "error": (
-                f"start_column {start_column} exceeds " f"line {start_line} length"
-            ),
-        }
+        raise RepositoryToolError(
+            f"start_column {start_column} exceeds line {start_line} length"
+        )
 
     pieces: list[str] = []
     used_chars = 0
@@ -363,7 +327,12 @@ def read_file(
 
 @tool
 def search_code(
-    runtime: ToolRuntime[AgentContext], keyword: str, max_results: int = 20
+    runtime: ToolRuntime[AgentContext],
+    keyword: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1),
+    ],
+    max_results: Annotated[int, Field(ge=1, le=MAX_SEARCH_RESULTS)] = 20,
 ):
     """Search for a literal keyword in files in the current repository.
 
@@ -377,39 +346,17 @@ def search_code(
 
     repo_path = runtime.context.repository_path
 
-    root = Path(repo_path).resolve()
-
-    if not root.exists():
-        return {
-            "success": False,
-            "error": f"Path not found: {repo_path}",
-        }
-
-    if not root.is_dir():
-        return {
-            "success": False,
-            "error": f"Path is not a directory: {repo_path}",
-        }
-
-    if not keyword.strip():
-        return {
-            "success": False,
-            "error": "Keyword cannot be empty",
-        }
-
-    if not 1 <= max_results <= MAX_SEARCH_RESULTS:
-        return {
-            "success": False,
-            "error": (f"max_results must be between 1 and {MAX_SEARCH_RESULTS}"),
-        }
+    root = resolve_repository_root(repo_path)
 
     matches = []
+    skipped_file_count = 0
     normalized_keyword = keyword.lower()
 
     for file, relative_path in iter_repository_files(root):
         try:
             content = file.read_text(encoding="utf-8")
         except (UnicodeDecodeError, PermissionError, OSError):
+            skipped_file_count += 1
             continue
 
         lines = content.splitlines()
@@ -433,6 +380,8 @@ def search_code(
                     "keyword": keyword,
                     "matches": matches,
                     "truncated": True,
+                    "partial": skipped_file_count > 0,
+                    "skipped_file_count": skipped_file_count,
                 }
 
     return {
@@ -441,12 +390,18 @@ def search_code(
         "keyword": keyword,
         "matches": matches,
         "truncated": False,
+        "partial": skipped_file_count > 0,
+        "skipped_file_count": skipped_file_count,
     }
 
 
 @tool
 def summarize_repository(
-    runtime: ToolRuntime[AgentContext], readme_max_chars: int = 2000
+    runtime: ToolRuntime[AgentContext],
+    readme_max_chars: Annotated[
+        int,
+        Field(ge=MIN_README_CHARS, le=MAX_README_CHARS),
+    ] = 2000,
 ):
     """Get a structural overview of the current repository.
 
@@ -456,28 +411,7 @@ def summarize_repository(
 
     repo_path = runtime.context.repository_path
 
-    root = Path(repo_path).resolve()
-
-    if not root.exists():
-        return {
-            "success": False,
-            "error": f"Path not found: {repo_path}",
-        }
-
-    if not root.is_dir():
-        return {
-            "success": False,
-            "error": f"Path is not a directory: {repo_path}",
-        }
-
-    if not MIN_README_CHARS <= readme_max_chars <= MAX_README_CHARS:
-        return {
-            "success": False,
-            "error": (
-                "readme_max_chars must be between "
-                f"{MIN_README_CHARS} and {MAX_README_CHARS}"
-            ),
-        }
+    root = resolve_repository_root(repo_path)
 
     files = []
     language_counts = Counter()
@@ -508,6 +442,7 @@ def summarize_repository(
 
     readme_preview = None
     readme_path = None
+    warnings: list[str] = []
 
     for candidate_name in ("README.md", "readme.md", "README", "Readme.md"):
         candidate = root / candidate_name
@@ -520,8 +455,9 @@ def summarize_repository(
         try:
             readme_content = readme_path.read_text(encoding="utf-8")
             readme_preview = readme_content[:readme_max_chars]
-        except (UnicodeDecodeError, PermissionError, OSError):
+        except (UnicodeDecodeError, PermissionError, OSError) as error:
             readme_preview = None
+            warnings.append(f"Could not read README: {error}")
 
     return {
         "success": True,
@@ -538,13 +474,15 @@ def summarize_repository(
             else None
         ),
         "readme_preview": readme_preview,
+        "partial": bool(warnings),
+        "warnings": warnings,
     }
 
 
 @tool
 def write_file(
     runtime: ToolRuntime[AgentContext],
-    file_path: str,
+    file_path: Annotated[str, StringConstraints(min_length=1)],
     content: str,
 ) -> dict:
     """Create a new UTF-8 text file in the current repository.
@@ -558,46 +496,28 @@ def write_file(
 
     repo_path = runtime.context.repository_path
 
-    root = Path(repo_path).resolve()
+    root = resolve_repository_root(repo_path)
+    path = resolve_repository_path(root, file_path)
 
-    if not root.exists() or not root.is_dir():
-        return {
-            "success": False,
-            "error": f"Invalid repository path: {repo_path}",
-        }
-
-    path = (root / file_path).resolve()
-
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return {
-            "success": False,
-            "error": "File path must stay inside the repository.",
-        }
-
-    if path.exists() and not path.is_file():
-        return {
-            "success": False,
-            "error": f"Path is not a file: {file_path}",
-        }
-
-    if not path.parent.exists():
-        return {
-            "success": False,
-            "error": f"Parent directory does not exist: {path.parent}",
-        }
-
-    try:
-        path.write_text(
-            content,
-            encoding="utf-8",
+    if path.exists():
+        raise RepositoryToolError(
+            f"Path already exists; write_file refuses to overwrite it: {file_path}"
         )
+
+    if not path.parent.is_dir():
+        raise RepositoryToolError(
+            f"Parent directory does not exist: {path.parent}"
+        )
+
+    try:
+        with path.open("x", encoding="utf-8") as stream:
+            stream.write(content)
+    except FileExistsError as error:
+        raise RepositoryToolError(
+            f"Path already exists; write_file refuses to overwrite it: {file_path}"
+        ) from error
     except OSError as error:
-        return {
-            "success": False,
-            "error": str(error),
-        }
+        raise RepositoryToolError(f"Could not write {file_path}: {error}") from error
 
     return {
         "success": True,
@@ -608,8 +528,8 @@ def write_file(
 @tool
 def replace_in_file(
     runtime: ToolRuntime[AgentContext],
-    file_path: str,
-    old_text: str,
+    file_path: Annotated[str, StringConstraints(min_length=1)],
+    old_text: Annotated[str, StringConstraints(min_length=1)],
     new_text: str,
 ) -> dict:
     """
@@ -617,82 +537,36 @@ def replace_in_file(
     """
     repo_path = runtime.context.repository_path
 
-    root = Path(repo_path).resolve()
-
-    if not root.exists():
-        return {
-            "success": False,
-            "error": f"Repository path not found: {repo_path}",
-        }
-
-    if not root.is_dir():
-        return {
-            "success": False,
-            "error": f"Repository path is not a directory: {repo_path}",
-        }
-
-    if not old_text:
-        return {
-            "success": False,
-            "error": "old_text cannot be empty",
-        }
-
-    path = (root / file_path).resolve()
-
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return {
-            "success": False,
-            "error": "File path must stay inside the repository",
-        }
+    root = resolve_repository_root(repo_path)
+    path = resolve_repository_path(root, file_path)
 
     if not path.exists():
-        return {
-            "success": False,
-            "error": f"File not found: {file_path}",
-        }
+        raise RepositoryToolError(f"File not found: {file_path}")
 
     if not path.is_file():
-        return {
-            "success": False,
-            "error": f"Path is not a file: {file_path}",
-        }
+        raise RepositoryToolError(f"Path is not a file: {file_path}")
 
     try:
         content = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return {
-            "success": False,
-            "error": f"File is not valid UTF-8 text: {file_path}",
-        }
-    except PermissionError:
-        return {
-            "success": False,
-            "error": f"Permission denied: {file_path}",
-        }
+    except UnicodeDecodeError as error:
+        raise RepositoryToolError(
+            f"File is not valid UTF-8 text: {file_path}"
+        ) from error
+    except PermissionError as error:
+        raise RepositoryToolError(f"Permission denied: {file_path}") from error
     except OSError as error:
-        return {
-            "success": False,
-            "error": str(error),
-        }
+        raise RepositoryToolError(f"Could not read {file_path}: {error}") from error
 
     occurrences = content.count(old_text)
 
     if occurrences == 0:
-        return {
-            "success": False,
-            "error": ("old_text was not found in " f"{file_path}"),
-        }
+        raise RepositoryToolError(f"old_text was not found in {file_path}")
 
     if occurrences > 1:
-        return {
-            "success": False,
-            "error": (
-                f"old_text appears {occurrences} times in "
-                f"{file_path}; provide a more specific snippet"
-            ),
-        }
+        raise RepositoryToolError(
+            f"old_text appears {occurrences} times in "
+            f"{file_path}; provide a more specific snippet"
+        )
 
     updated_content = content.replace(
         old_text,
@@ -705,16 +579,10 @@ def replace_in_file(
             updated_content,
             encoding="utf-8",
         )
-    except PermissionError:
-        return {
-            "success": False,
-            "error": f"Permission denied: {file_path}",
-        }
+    except PermissionError as error:
+        raise RepositoryToolError(f"Permission denied: {file_path}") from error
     except OSError as error:
-        return {
-            "success": False,
-            "error": str(error),
-        }
+        raise RepositoryToolError(f"Could not write {file_path}: {error}") from error
 
     return {
         "success": True,

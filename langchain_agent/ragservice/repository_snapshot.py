@@ -13,13 +13,6 @@ RepositorySnapshot: TypeAlias = dict[
     dict[str, Any],
 ]
 
-
-class RepositoryChangedDuringIndexingError(RuntimeError):
-    """
-    建立索引期间，仓库源码持续发生变化。
-    """
-
-
 class RepositorySnapshotBuilder:
     """
     为 Python 仓库建立文件内容快照。

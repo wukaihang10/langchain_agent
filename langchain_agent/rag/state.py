@@ -7,9 +7,6 @@ class RAGState(TypedDict):
     query: str
     top_k: int
 
-    index_ready: NotRequired[bool]
-    error: NotRequired[str]
-
     candidate_results: NotRequired[list[SearchResult]]
     final_results: NotRequired[list[SearchResult]]
 

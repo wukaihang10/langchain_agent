@@ -1,4 +1,7 @@
+from typing import Annotated
+
 from langchain.tools import ToolRuntime, tool
+from pydantic import Field, StringConstraints
 
 from langchain_agent.context import AgentContext
 from langchain_agent.rag.graph import rag_graph
@@ -6,9 +9,9 @@ from langchain_agent.rag.graph import rag_graph
 
 @tool
 def search_repository_knowledge(
-    query: str,
+    query: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)],
     runtime: ToolRuntime[AgentContext],
-    top_k: int = 5,
+    top_k: Annotated[int, Field(ge=1, le=12)] = 5,
 ) -> str:
     """Semantically search the current repository for code relevant to a question.
 
