@@ -3,11 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from langchain_agent.repository_knowledge._internal.retrieval.context_builder import ContextBuilder
-from langchain_agent.repository_knowledge._internal.indexing.indexer import RAGIndexer
-from langchain_agent.repository_knowledge._internal.models import (
-    IndexBuildResult,
-    IndexReadyResult,
-    RAGSearchResponse,
+from langchain_agent.repository_knowledge._internal.indexing.indexer import RepositoryIndexer
+from langchain_agent.repository_knowledge._internal.indexing.models import (
+    IndexBuildStats,
+    PreparedIndex,
+)
+from langchain_agent.repository_knowledge._internal.retrieval.models import (
+    RetrievalResult,
 )
 from langchain_agent.repository_knowledge._internal.source.python_chunker import (
     PythonASTChunker,
@@ -23,7 +25,7 @@ from langchain_agent.repository_knowledge._internal.retrieval.vector_store impor
 from langchain_agent.repository_knowledge._internal.indexing.index_storage import (
     IndexCompatibilityError,
     IndexCorruptionError,
-    RAGIndexStorage,
+    RepositoryIndexStorage,
 )
 from langchain_agent.repository_knowledge.errors import (
     RepositoryChangedDuringIndexingError,
@@ -61,6 +63,7 @@ from langchain_agent.repository_knowledge._internal.retrieval.reranker import (
 )
 from langchain_agent.repository_knowledge.config import RetrievalMode
 from langchain_agent.repository_knowledge.ports import EmbeddingClient
+
 
 class PythonRepositoryKnowledgeBackend:
     """
@@ -132,7 +135,7 @@ class PythonRepositoryKnowledgeBackend:
             b=0.75,
         )
 
-        self.indexer = RAGIndexer(
+        self.indexer = RepositoryIndexer(
             loader=self.loader,
             chunker=self.chunker,
             embedding_client=(self.embedding_client),
@@ -200,8 +203,8 @@ class PythonRepositoryKnowledgeBackend:
         self,
         index_directory: str | Path,
         max_attempts: int = 2,
-    ) -> IndexReadyResult:
-        storage = RAGIndexStorage(index_directory)
+    ) -> PreparedIndex:
+        storage = RepositoryIndexStorage(index_directory)
 
         rebuild_reason: str | None = None
 
@@ -209,7 +212,7 @@ class PythonRepositoryKnowledgeBackend:
             try:
                 index_result = self._load_index(index_directory)
 
-                return IndexReadyResult(
+                return PreparedIndex(
                     index=index_result,
                     source="disk",
                 )
@@ -225,13 +228,13 @@ class PythonRepositoryKnowledgeBackend:
             max_attempts=max_attempts,
         )
 
-        return IndexReadyResult(
+        return PreparedIndex(
             index=index_result,
             source="rebuilt",
             rebuild_reason=rebuild_reason,
         )
 
-    def rebuild(self) -> IndexBuildResult:
+    def rebuild(self) -> IndexBuildStats:
         index_result = self.indexer.rebuild_directory(self.repository_path)
 
         self.bm25_index.replace(self.vector_store.chunks)
@@ -243,7 +246,7 @@ class PythonRepositoryKnowledgeBackend:
         query: str,
         top_k: int = 12,
         minimum_score: float | None = None,
-    ) -> RAGSearchResponse:
+    ) -> RetrievalResult:
         if not self.is_indexed:
             raise RuntimeError(
                 "Repository index has not been built. "
@@ -257,7 +260,7 @@ class PythonRepositoryKnowledgeBackend:
         )
         context = self.context_builder.build(search_results)
 
-        return RAGSearchResponse(
+        return RetrievalResult(
             query=query,
             context=context,
             search_results=search_results,
@@ -267,7 +270,7 @@ class PythonRepositoryKnowledgeBackend:
         self,
         index_directory: str | Path,
         max_attempts: int = 2,
-    ) -> IndexBuildResult:
+    ) -> IndexBuildStats:
         if max_attempts <= 0:
             raise ValueError("max_attempts must be greater than 0")
 
@@ -305,7 +308,7 @@ class PythonRepositoryKnowledgeBackend:
 
         document_count = len({chunk.document_id for chunk in chunks})
 
-        storage = RAGIndexStorage(index_directory)
+        storage = RepositoryIndexStorage(index_directory)
 
         return storage.save(
             repository_path=(self.repository_path),
@@ -325,8 +328,8 @@ class PythonRepositoryKnowledgeBackend:
     def _load_index(
         self,
         index_directory: str | Path,
-    ) -> IndexBuildResult:
-        storage = RAGIndexStorage(index_directory)
+    ) -> IndexBuildStats:
+        storage = RepositoryIndexStorage(index_directory)
 
         # 这里返回的索引已经是：
         # 格式合法、文件完整、内部自洽。
@@ -348,7 +351,7 @@ class PythonRepositoryKnowledgeBackend:
 
         self.bm25_index.replace(loaded_index.chunks)
 
-        return IndexBuildResult(
+        return IndexBuildStats(
             source=str(self.repository_path),
             document_count=(loaded_index.manifest["document_count"]),
             chunk_count=len(loaded_index.chunks),

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from langchain_agent.repository_knowledge._internal.interfaces import (
+from langchain_agent.repository_knowledge._internal.retrieval.interfaces import (
     VectorStore,
 )
 
 
-from langchain_agent.repository_knowledge._internal.models import SearchResult
+from langchain_agent.repository_knowledge._internal.retrieval.models import SearchResult
 from langchain_agent.repository_knowledge.ports import EmbeddingClient
 
 

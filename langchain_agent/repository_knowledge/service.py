@@ -19,8 +19,9 @@ from langchain_agent.repository_knowledge.ports import EmbeddingClient
 class RepositoryKnowledgeService:
     """Repository-scoped public facade for indexing and retrieval.
 
-    The current implementation delegates to the legacy Python RAG internals.
-    Callers depend only on this facade so those internals can be reorganized
+    The current implementation delegates to private Python-repository
+    indexing and retrieval components. Callers depend only on this facade so
+    those internals can be reorganized
     without changing Agent, CLI, or Web API code.
     """
 
@@ -111,9 +112,6 @@ class RepositoryKnowledgeService:
             from langchain_agent.repository_knowledge._internal.backend import (
                 PythonRepositoryKnowledgeBackend,
             )
-            from langchain_agent.repository_knowledge._internal.retrieval.query_expansion import (
-                IdentityQueryExpander,
-            )
 
             self._backend = PythonRepositoryKnowledgeBackend(
                 repository_path=self.repository_path,
@@ -123,7 +121,6 @@ class RepositoryKnowledgeService:
                 max_context_characters=self.config.max_context_characters,
                 max_context_items=self.config.max_context_items,
                 retrieval_mode=self.config.retrieval_mode,
-                query_expander=IdentityQueryExpander(),
             )
 
         return self._backend

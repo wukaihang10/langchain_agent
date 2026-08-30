@@ -5,7 +5,8 @@ from collections.abc import Iterable, Sequence
 import numpy as np
 from numpy.typing import NDArray
 
-from langchain_agent.repository_knowledge._internal.models import Chunk, SearchResult
+from langchain_agent.repository_knowledge._internal.retrieval.models import SearchResult
+from langchain_agent.repository_knowledge._internal.source.models import Chunk
 
 FloatVector = NDArray[np.float32]
 FloatMatrix = NDArray[np.float32]

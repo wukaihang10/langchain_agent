@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import math
 
-from langchain_agent.repository_knowledge._internal.interfaces import Retriever
-from langchain_agent.repository_knowledge._internal.models import (
-    Chunk,
+from langchain_agent.repository_knowledge._internal.retrieval.interfaces import Retriever
+from langchain_agent.repository_knowledge._internal.retrieval.models import (
     SearchResult,
 )
+from langchain_agent.repository_knowledge._internal.source.models import Chunk
 from langchain_agent.repository_knowledge._internal.retrieval.query_expansion import (
     QueryExpander,
 )

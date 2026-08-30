@@ -19,12 +19,13 @@ must not import `_internal` modules.
 ## Internal layer
 
 - `_internal/backend.py` composes the indexing and retrieval pipeline.
-- `_internal/source/` loads repository files and creates Python-aware chunks.
-- `_internal/indexing/` builds, persists, validates, and reloads indexes.
+- `_internal/source/` owns source models and protocols, loads repository files,
+  and creates Python-aware chunks.
+- `_internal/indexing/` owns index-result models and builds, persists,
+  validates, and reloads indexes.
 - `_internal/retrieval/` implements dense and lexical retrieval, fusion,
-  optional reranking, and context selection.
-- `_internal/models.py` and `_internal/interfaces.py` connect those pipeline
-  stages without becoming part of the public API.
+  optional reranking, and context selection. Its retrieval models and protocols
+  stay in the same subpackage.
 
 ## Placement rules
 

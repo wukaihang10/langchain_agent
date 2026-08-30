@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from langchain_agent.repository_knowledge._internal.models import (
-    BuiltContext,
-    ContextItem,
+from langchain_agent.repository_knowledge._internal.retrieval.models import (
+    RetrievedContext,
+    SelectedContext,
     SearchResult,
 )
 
@@ -46,10 +46,10 @@ class ContextBuilder:
     def build(
         self,
         results: Sequence[SearchResult],
-    ) -> BuiltContext:
+    ) -> RetrievedContext:
         unique_results = self._deduplicate(results)
 
-        selected_items: list[ContextItem] = []
+        selected_items: list[SelectedContext] = []
         sections: list[str] = []
         used_characters = 0
 
@@ -75,7 +75,7 @@ class ContextBuilder:
 
             context_id = f"source_{len(selected_items) + 1}"
 
-            item = ContextItem(
+            item = SelectedContext(
                 context_id=context_id,
                 chunk=result.chunk,
                 score=result.score,
@@ -106,7 +106,7 @@ class ContextBuilder:
 
         text = "\n\n".join(sections)
 
-        return BuiltContext(
+        return RetrievedContext(
             text=text,
             items=selected_items,
             character_count=len(text),
@@ -153,7 +153,7 @@ class ContextBuilder:
 
     def _format_item(
         self,
-        item: ContextItem,
+        item: SelectedContext,
     ) -> str:
         chunk = item.chunk
         metadata = chunk.metadata

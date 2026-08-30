@@ -1,24 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Protocol
 
-from langchain_agent.repository_knowledge._internal.models import Chunk, Document, SearchResult
+from langchain_agent.repository_knowledge._internal.retrieval.models import (
+    SearchResult,
+)
+from langchain_agent.repository_knowledge._internal.source.models import Chunk
 from langchain_agent.repository_knowledge.ports import FloatMatrix, FloatVector
-
-
-class DocumentLoader(Protocol):
-    def load_directory(
-        self,
-        directory: str | Path,
-    ) -> list[Document]: ...
-
-
-class DocumentChunker(Protocol):
-    def split_documents(
-        self,
-        documents: list[Document],
-    ) -> list[Chunk]: ...
 
 
 class Retriever(Protocol):

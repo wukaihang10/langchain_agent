@@ -8,14 +8,14 @@ import numpy as np
 if TYPE_CHECKING:
     from sentence_transformers import CrossEncoder
 
-from langchain_agent.repository_knowledge._internal.interfaces import (
+from langchain_agent.repository_knowledge._internal.retrieval.interfaces import (
     Reranker,
     Retriever,
 )
-from langchain_agent.repository_knowledge._internal.models import (
-    Chunk,
+from langchain_agent.repository_knowledge._internal.retrieval.models import (
     SearchResult,
 )
+from langchain_agent.repository_knowledge._internal.source.models import Chunk
 
 
 class CrossEncoderReranker:

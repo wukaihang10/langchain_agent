@@ -5,19 +5,24 @@ from pathlib import Path
 
 import numpy as np
 
-from langchain_agent.repository_knowledge._internal.interfaces import (
+from langchain_agent.repository_knowledge._internal.source.interfaces import (
     DocumentChunker,
     DocumentLoader,
+)
+from langchain_agent.repository_knowledge._internal.retrieval.interfaces import (
     VectorStore,
 )
 
-from langchain_agent.repository_knowledge._internal.models import Document, IndexBuildResult
+from langchain_agent.repository_knowledge._internal.indexing.models import (
+    IndexBuildStats,
+)
+from langchain_agent.repository_knowledge._internal.source.models import Document
 from langchain_agent.repository_knowledge.ports import EmbeddingClient
 
 
-class RAGIndexer:
+class RepositoryIndexer:
     """
-    负责构建 RAG 知识库索引。
+    负责构建仓库知识索引。
 
     流程：
         Document
@@ -47,7 +52,7 @@ class RAGIndexer:
     def rebuild_directory(
         self,
         directory: str | Path,
-    ) -> IndexBuildResult:
+    ) -> IndexBuildStats:
         """
         读取目录中的文档并重建整个索引。
 
@@ -67,7 +72,7 @@ class RAGIndexer:
         self,
         documents: Sequence[Document],
         source: str = "documents",
-    ) -> IndexBuildResult:
+    ) -> IndexBuildStats:
         """
         根据已经加载好的 Document 重建索引。
         """
@@ -92,7 +97,7 @@ class RAGIndexer:
             vectors=vectors,
         )
 
-        return IndexBuildResult(
+        return IndexBuildStats(
             source=source,
             document_count=len(document_list),
             chunk_count=len(chunks),

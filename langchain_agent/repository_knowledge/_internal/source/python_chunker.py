@@ -5,7 +5,7 @@ import hashlib
 from dataclasses import dataclass
 
 from langchain_agent.repository_knowledge._internal.source.chunker import TextChunker
-from langchain_agent.repository_knowledge._internal.models import Chunk, Document
+from langchain_agent.repository_knowledge._internal.source.models import Chunk, Document
 
 
 @dataclass(frozen=True)

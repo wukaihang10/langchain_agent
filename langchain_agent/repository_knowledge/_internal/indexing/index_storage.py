@@ -12,7 +12,7 @@ from uuid import uuid4
 import numpy as np
 from numpy.typing import NDArray
 
-from langchain_agent.repository_knowledge._internal.models import Chunk
+from langchain_agent.repository_knowledge._internal.source.models import Chunk
 
 FloatMatrix = NDArray[np.float32]
 
@@ -33,7 +33,7 @@ class IndexCorruptionError(IndexStorageError):
 
 class IndexCompatibilityError(IndexStorageError):
     """
-    索引存在，但配置与当前 RAG 不兼容。
+    索引存在，但配置与当前仓库知识服务不兼容。
     """
 
 
@@ -44,9 +44,9 @@ class LoadedIndex:
     vectors: FloatMatrix
 
 
-class RAGIndexStorage:
+class RepositoryIndexStorage:
     """
-    将 RAG 索引保存到本地目录。
+    将仓库知识索引保存到本地目录。
 
     文件结构：
 
@@ -189,7 +189,7 @@ class RAGIndexStorage:
     def load(self) -> LoadedIndex:
         if not self.exists():
             raise FileNotFoundError(
-                "RAG index is incomplete or "
+                "Repository index is incomplete or "
                 f"does not exist: "
                 f"{self.index_directory}"
             )
@@ -355,7 +355,7 @@ class RAGIndexStorage:
 
         if schema_version != INDEX_SCHEMA_VERSION:
             raise IndexCompatibilityError(
-                "Unsupported RAG index schema: "
+                "Unsupported repository index schema: "
                 f"expected {INDEX_SCHEMA_VERSION}, "
                 f"got {schema_version}"
             )

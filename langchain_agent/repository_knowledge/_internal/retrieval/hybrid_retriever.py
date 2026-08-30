@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import math
 
-from langchain_agent.repository_knowledge._internal.interfaces import Retriever
-from langchain_agent.repository_knowledge._internal.models import Chunk, SearchResult
+from langchain_agent.repository_knowledge._internal.retrieval.interfaces import Retriever
+from langchain_agent.repository_knowledge._internal.retrieval.models import SearchResult
+from langchain_agent.repository_knowledge._internal.source.models import Chunk
 
 
 class HybridRetriever:

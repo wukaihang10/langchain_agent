@@ -5,7 +5,8 @@ from collections import Counter, defaultdict
 from collections.abc import Sequence
 
 from langchain_agent.repository_knowledge._internal.retrieval.code_tokenizer import CodeTokenizer
-from langchain_agent.repository_knowledge._internal.models import Chunk, SearchResult
+from langchain_agent.repository_knowledge._internal.retrieval.models import SearchResult
+from langchain_agent.repository_knowledge._internal.source.models import Chunk
 
 
 class InMemoryBM25Index:
