@@ -5,7 +5,7 @@ from collections.abc import Iterable, Sequence
 import numpy as np
 from numpy.typing import NDArray
 
-from langchain_agent.ragservice.models import Chunk, SearchResult
+from langchain_agent.repository_knowledge._internal.models import Chunk, SearchResult
 
 FloatVector = NDArray[np.float32]
 FloatMatrix = NDArray[np.float32]
@@ -310,7 +310,8 @@ class InMemoryVectorStore:
 
         if matrix.shape[0] != expected_rows:
             raise ValueError(
-                f"Chunk and vector counts do not match: {expected_rows} chunks, {matrix.shape[0]} vectors"
+                "Chunk and vector counts do not match: "
+                f"{expected_rows} chunks, {matrix.shape[0]} vectors"
             )
 
         if matrix.shape[1] != self.dimension:
@@ -387,7 +388,8 @@ class InMemoryVectorStore:
 
         if query.shape[0] != self.dimension:
             raise ValueError(
-                f"Unexpected query vector dimension: expected {self.dimension}, got {query.shape[0]}"
+                "Unexpected query vector dimension: "
+                f"expected {self.dimension}, got {query.shape[0]}"
             )
 
         if not np.all(np.isfinite(query)):

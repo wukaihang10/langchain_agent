@@ -1,104 +1,86 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
 
-from langchain_agent.ragservice.interfaces import EmbeddingClient
-
-from langchain_agent.ragservice.code_prompt_builder import (
-    CodeRAGPromptBuilder,
-)
-from langchain_agent.ragservice.context_builder import ContextBuilder
-from langchain_agent.ragservice.embedding import (
-    SentenceTransformerEmbeddingClient,
-)
-from langchain_agent.ragservice.generator import RAGGenerator
-from langchain_agent.ragservice.indexer import RAGIndexer
-from langchain_agent.ragservice.models import (
+from langchain_agent.repository_knowledge._internal.retrieval.context_builder import ContextBuilder
+from langchain_agent.repository_knowledge._internal.indexing.indexer import RAGIndexer
+from langchain_agent.repository_knowledge._internal.models import (
     IndexBuildResult,
     IndexReadyResult,
-    RAGAnswer,
     RAGSearchResponse,
 )
-from langchain_agent.ragservice.python_chunker import (
+from langchain_agent.repository_knowledge._internal.source.python_chunker import (
     PythonASTChunker,
 )
-from langchain_agent.ragservice.python_loader import (
+from langchain_agent.repository_knowledge._internal.source.python_loader import (
     PythonDocumentLoader,
 )
-from langchain_agent.ragservice.retriever import VectorRetriever
-from langchain_agent.ragservice.service import NaiveRAG
-from langchain_agent.ragservice.vector_store import (
+from langchain_agent.repository_knowledge._internal.retrieval.retriever import VectorRetriever
+from langchain_agent.repository_knowledge._internal.retrieval.vector_store import (
     InMemoryVectorStore,
 )
 
-from langchain_agent.ragservice.index_storage import (
+from langchain_agent.repository_knowledge._internal.indexing.index_storage import (
     IndexCompatibilityError,
     IndexCorruptionError,
     RAGIndexStorage,
 )
-from langchain_agent.ragservice.errors import (
+from langchain_agent.repository_knowledge.errors import (
     RepositoryChangedDuringIndexingError,
 )
 
-from langchain_agent.ragservice.repository_snapshot import (
+from langchain_agent.repository_knowledge._internal.indexing.repository_snapshot import (
     RepositorySnapshot,
     RepositorySnapshotBuilder,
     describe_repository_changes,
 )
 
-from langchain_agent.ragservice.bm25 import (
+from langchain_agent.repository_knowledge._internal.retrieval.bm25 import (
     BM25Retriever,
     InMemoryBM25Index,
 )
-from langchain_agent.ragservice.code_tokenizer import (
+from langchain_agent.repository_knowledge._internal.retrieval.code_tokenizer import (
     CodeTokenizer,
 )
-from langchain_agent.ragservice.hybrid_retriever import (
+from langchain_agent.repository_knowledge._internal.retrieval.hybrid_retriever import (
     HybridRetriever,
 )
 
-from langchain_agent.ragservice.query_expansion import (
-    LLMQueryExpander,
+from langchain_agent.repository_knowledge._internal.retrieval.query_expansion import (
+    IdentityQueryExpander,
     QueryExpander,
 )
 
-from langchain_agent.ragservice.multi_query_retriever import (
+from langchain_agent.repository_knowledge._internal.retrieval.multi_query_retriever import (
     MultiQueryRetriever,
 )
 
-from langchain_agent.ragservice.reranker import (
+from langchain_agent.repository_knowledge._internal.retrieval.reranker import (
     CrossEncoderReranker,
     RerankingRetriever,
 )
+from langchain_agent.repository_knowledge.config import RetrievalMode
+from langchain_agent.repository_knowledge.ports import EmbeddingClient
 
-RetrievalMode = Literal[
-    "fast",
-    "quality",
-]
-
-
-class PythonRepositoryRAG:
+class PythonRepositoryKnowledgeBackend:
     """
-    面向本地 Python 仓库的完整 RAG。
+    面向本地 Python 仓库的索引与检索实现。
 
     rebuild():
         扫描并建立代码索引。
 
-    answer():
-        对已经建立的代码索引进行问答。
+    search():
+        从已经建立的代码索引中检索证据。
     """
 
     def __init__(
         self,
         repository_path: str | Path,
-        model_name: str = ("BAAI/bge-small-zh-v1.5"),
-        embedding_client: EmbeddingClient | None = None,
+        embedding_client: EmbeddingClient,
         max_chunk_characters: int = 2400,
         overlap_lines: int = 8,
         max_context_characters: int = 10000,
         max_context_items: int = 6,
-        show_progress_bar: bool = False,
         device: str | None = None,
         retrieval_mode: RetrievalMode = "fast",
         query_expander: QueryExpander | None = None,
@@ -135,28 +117,8 @@ class PythonRepositoryRAG:
             overlap_lines=self.overlap_lines,
         )
 
-        if embedding_client is None:
-            self.embedding_client = SentenceTransformerEmbeddingClient(
-                model_name=model_name,
-                show_progress_bar=(show_progress_bar),
-                device=device,
-            )
-            self.embedding_model_id = model_name
-
-        else:
-            self.embedding_client = embedding_client
-
-            self.embedding_model_id = str(
-                getattr(
-                    embedding_client,
-                    "model_id",
-                    getattr(
-                        embedding_client,
-                        "model_name",
-                        type(embedding_client).__qualname__,
-                    ),
-                )
-            )
+        self.embedding_client = embedding_client
+        self.embedding_model_id = embedding_client.model_id
 
         self.vector_store = InMemoryVectorStore(
             dimension=(self.embedding_client.dimension)
@@ -194,7 +156,7 @@ class PythonRepositoryRAG:
         self.query_expander = (
             query_expander
             if query_expander is not None
-            else LLMQueryExpander(max_rewrites=2)
+            else IdentityQueryExpander()
         )
 
         self.multi_query_retriever = MultiQueryRetriever(
@@ -211,8 +173,7 @@ class PythonRepositoryRAG:
 
         else:
             reranker = CrossEncoderReranker(
-                # model_name=("BAAI/bge-reranker-v2-m3"),
-                model_name=r"C:\Users\31972\.cache\huggingface\hub\models--BAAI--bge-reranker-v2-m3",
+                model_name="BAAI/bge-reranker-v2-m3",
                 batch_size=8,
                 max_length=512,
                 device=device,
@@ -229,14 +190,6 @@ class PythonRepositoryRAG:
             max_context_characters=(max_context_characters),
             max_items=max_context_items,
             include_scores=False,
-        )
-
-        self.generator = RAGGenerator(prompt_builder=(CodeRAGPromptBuilder()))
-
-        self.service = NaiveRAG(
-            retriever=self.retriever,
-            context_builder=(self.context_builder),
-            generator=self.generator,
         )
 
     @property
@@ -285,24 +238,6 @@ class PythonRepositoryRAG:
 
         return index_result
 
-    def answer(
-        self,
-        question: str,
-        top_k: int = 12,
-        minimum_score: float | None = None,
-    ) -> RAGAnswer:
-        if not self.is_indexed:
-            raise RuntimeError(
-                "Repository index has not been built. "
-                "Call rebuild() before answer()."
-            )
-
-        return self.service.answer(
-            question=question,
-            top_k=top_k,
-            minimum_score=minimum_score,
-        )
-
     def search(
         self,
         query: str,
@@ -315,10 +250,17 @@ class PythonRepositoryRAG:
                 "Call rebuild() before search()."
             )
 
-        return self.service.search(
+        search_results = self.retriever.retrieve(
             query=query,
             top_k=top_k,
             minimum_score=minimum_score,
+        )
+        context = self.context_builder.build(search_results)
+
+        return RAGSearchResponse(
+            query=query,
+            context=context,
+            search_results=search_results,
         )
 
     def _rebuild_and_save(

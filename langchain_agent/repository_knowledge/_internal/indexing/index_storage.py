@@ -12,7 +12,7 @@ from uuid import uuid4
 import numpy as np
 from numpy.typing import NDArray
 
-from langchain_agent.ragservice.models import Chunk
+from langchain_agent.repository_knowledge._internal.models import Chunk
 
 FloatMatrix = NDArray[np.float32]
 

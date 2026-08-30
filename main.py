@@ -31,7 +31,9 @@ from langchain_agent.tool_retry import (
 )
 from langchain_agent.tools.repository import REPOSITORY_TOOLS
 from langchain_agent.tools.rag import search_repository_knowledge
-from langchain_agent.ragservice.embedding import SentenceTransformerEmbeddingClient
+from langchain_agent.repository_knowledge.embedding import (
+    SentenceTransformerEmbeddingClient,
+)
 from langchain_agent.repository_knowledge import (
     RepositoryKnowledgeConfig,
     RepositoryKnowledgeService,

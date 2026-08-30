@@ -24,10 +24,7 @@ class SentenceTransformerEmbeddingClient:
         先添加查询指令，再进行编码。
     """
 
-    # DEFAULT_MODEL_NAME = "BAAI/bge-small-zh-v1.5"
-    DEFAULT_MODEL_NAME = (
-        r"C:\Users\31972\.cache\huggingface\hub\models--BAAI--bge-small-zh-v1.5"
-    )
+    DEFAULT_MODEL_NAME = "BAAI/bge-small-zh-v1.5"
 
     DEFAULT_QUERY_INSTRUCTION = "为这个句子生成表示以用于检索相关文章："
 

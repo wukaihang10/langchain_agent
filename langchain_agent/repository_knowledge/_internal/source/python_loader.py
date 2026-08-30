@@ -3,7 +3,7 @@ from __future__ import annotations
 import tokenize
 from pathlib import Path
 
-from langchain_agent.ragservice.models import Document
+from langchain_agent.repository_knowledge._internal.models import Document
 
 
 class PythonDocumentLoader:

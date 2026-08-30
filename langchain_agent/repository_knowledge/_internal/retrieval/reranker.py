@@ -8,11 +8,11 @@ import numpy as np
 if TYPE_CHECKING:
     from sentence_transformers import CrossEncoder
 
-from langchain_agent.ragservice.interfaces import (
+from langchain_agent.repository_knowledge._internal.interfaces import (
     Reranker,
     Retriever,
 )
-from langchain_agent.ragservice.models import (
+from langchain_agent.repository_knowledge._internal.models import (
     Chunk,
     SearchResult,
 )
@@ -55,7 +55,7 @@ class CrossEncoderReranker:
         self.show_progress_bar = show_progress_bar
 
         # Lazy loading:
-        # PythonRepositoryRAG 初始化时
+        # Repository knowledge backend 初始化时
         # 不立即占用 reranker 内存。
         self._model: CrossEncoder | None = None
 

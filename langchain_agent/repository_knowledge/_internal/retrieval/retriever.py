@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from langchain_agent.ragservice.interfaces import (
-    EmbeddingClient,
+from langchain_agent.repository_knowledge._internal.interfaces import (
     VectorStore,
 )
 
 
-from langchain_agent.ragservice.models import SearchResult
+from langchain_agent.repository_knowledge._internal.models import SearchResult
+from langchain_agent.repository_knowledge.ports import EmbeddingClient
 
 
 class VectorRetriever:
@@ -22,7 +22,8 @@ class VectorRetriever:
     ) -> None:
         if embedding_client.dimension != vector_store.dimension:
             raise ValueError(
-                f"Embedding client and vector store dimension do not match: {embedding_client.dimension} != {vector_store.dimension}"
+                "Embedding client and vector store dimension do not match: "
+                f"{embedding_client.dimension} != {vector_store.dimension}"
             )
 
         self.embedding_client = embedding_client

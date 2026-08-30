@@ -5,14 +5,14 @@ from pathlib import Path
 
 import numpy as np
 
-from langchain_agent.ragservice.interfaces import (
+from langchain_agent.repository_knowledge._internal.interfaces import (
     DocumentChunker,
     DocumentLoader,
-    EmbeddingClient,
     VectorStore,
 )
 
-from langchain_agent.ragservice.models import Document, IndexBuildResult
+from langchain_agent.repository_knowledge._internal.models import Document, IndexBuildResult
+from langchain_agent.repository_knowledge.ports import EmbeddingClient
 
 
 class RAGIndexer:
@@ -35,7 +35,8 @@ class RAGIndexer:
     ) -> None:
         if embedding_client.dimension != vector_store.dimension:
             raise ValueError(
-                f"Embedding client and vector store dimension do not match: {embedding_client.dimension} != {vector_store.dimension}"
+                "Embedding client and vector store dimension do not match: "
+                f"{embedding_client.dimension} != {vector_store.dimension}"
             )
 
         self.loader = loader

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterable
 
-from langchain_agent.ragservice.models import Chunk, Document
+from langchain_agent.repository_knowledge._internal.models import Chunk, Document
 
 
 class TextChunker:

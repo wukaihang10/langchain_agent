@@ -105,31 +105,6 @@ class BuiltContext:
 
 
 @dataclass
-class RAGAnswer:
-    """
-    一次完整 RAG 问答的结果。
-
-    answer：
-        LLM 最终生成的回答。
-
-    context：
-        实际交给 LLM 的检索上下文。
-
-    search_results：
-        Retriever 最初返回的结果，方便调试检索排名。
-    """
-
-    question: str
-    answer: str
-    context: BuiltContext
-    search_results: list[SearchResult]
-
-    @property
-    def sources(self) -> list[ContextItem]:
-        return self.context.items
-
-
-@dataclass
 class RAGSearchResponse:
     """
     一次完整的 RAG 检索结果，但不调用生成模型。

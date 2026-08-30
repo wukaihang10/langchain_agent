@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 from typing import Any, TypeAlias
 
-from langchain_agent.ragservice.python_loader import (
+from langchain_agent.repository_knowledge._internal.source.python_loader import (
     PythonDocumentLoader,
 )
 

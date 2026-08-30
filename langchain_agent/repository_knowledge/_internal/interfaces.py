@@ -3,13 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-import numpy as np
-from numpy.typing import NDArray
-
-from langchain_agent.ragservice.models import Chunk, Document, SearchResult
-
-FloatVector = NDArray[np.float32]
-FloatMatrix = NDArray[np.float32]
+from langchain_agent.repository_knowledge._internal.models import Chunk, Document, SearchResult
+from langchain_agent.repository_knowledge.ports import FloatMatrix, FloatVector
 
 
 class DocumentLoader(Protocol):
@@ -24,20 +19,6 @@ class DocumentChunker(Protocol):
         self,
         documents: list[Document],
     ) -> list[Chunk]: ...
-
-
-class EmbeddingClient(Protocol):
-    dimension: int
-
-    def embed_documents(
-        self,
-        texts: list[str],
-    ) -> FloatMatrix: ...
-
-    def embed_query(
-        self,
-        query: str,
-    ) -> FloatVector: ...
 
 
 class Retriever(Protocol):

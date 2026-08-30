@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import math
 
-from langchain_agent.ragservice.interfaces import Retriever
-from langchain_agent.ragservice.models import (
+from langchain_agent.repository_knowledge._internal.interfaces import Retriever
+from langchain_agent.repository_knowledge._internal.models import (
     Chunk,
     SearchResult,
 )
-from langchain_agent.ragservice.query_expansion import (
+from langchain_agent.repository_knowledge._internal.retrieval.query_expansion import (
     QueryExpander,
-    QueryExpansionError,
 )
 
 
@@ -144,19 +143,9 @@ class MultiQueryRetriever:
         self,
         original_query: str,
     ) -> list[str]:
-        """
-        Rewrite 属于可选增强。
+        """Combine the required original query with optional rewrites."""
 
-        QueryExpansionError 时退化为原始 query，
-        不能让整个 repository search 因为
-        rewrite 服务失败而失败。
-        """
-
-        try:
-            rewrites = self.query_expander.expand(original_query)
-
-        except QueryExpansionError:
-            rewrites = []
+        rewrites = self.query_expander.expand(original_query)
 
         queries = [
             original_query,

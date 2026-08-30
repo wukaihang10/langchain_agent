@@ -105,17 +105,17 @@ class RepositoryKnowledgeService:
 
     def _get_backend(self):
         if self._backend is None:
-            # Keep the legacy implementation behind the new public boundary
-            # during the incremental migration. Import and construct it lazily
-            # so selecting a session does not load local models or an index.
-            from langchain_agent.ragservice.python_repository_rag import (
-                PythonRepositoryRAG,
+            # Keep implementation details behind the public facade. Import and
+            # construct them lazily so selecting a session does not load local
+            # models or an index.
+            from langchain_agent.repository_knowledge._internal.backend import (
+                PythonRepositoryKnowledgeBackend,
             )
-            from langchain_agent.ragservice.query_expansion import (
+            from langchain_agent.repository_knowledge._internal.retrieval.query_expansion import (
                 IdentityQueryExpander,
             )
 
-            self._backend = PythonRepositoryRAG(
+            self._backend = PythonRepositoryKnowledgeBackend(
                 repository_path=self.repository_path,
                 embedding_client=self.embedding_client,
                 max_chunk_characters=self.config.max_chunk_characters,
