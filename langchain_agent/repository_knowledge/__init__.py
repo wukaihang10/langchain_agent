@@ -5,6 +5,7 @@ from langchain_agent.repository_knowledge.config import (
     RetrievalMode,
 )
 from langchain_agent.repository_knowledge.errors import (
+    EmbeddingError,
     IndexBuildError,
     IndexNotReadyError,
     InvalidRepositoryError,
@@ -14,6 +15,7 @@ from langchain_agent.repository_knowledge.errors import (
 from langchain_agent.repository_knowledge.models import (
     Evidence,
     IndexReadyResult,
+    RepositoryKnowledgeStatus,
     SearchResponse,
 )
 from langchain_agent.repository_knowledge.ports import EmbeddingClient
@@ -21,6 +23,7 @@ from langchain_agent.repository_knowledge.service import RepositoryKnowledgeServ
 
 __all__ = [
     "EmbeddingClient",
+    "EmbeddingError",
     "Evidence",
     "IndexBuildError",
     "IndexNotReadyError",
@@ -30,7 +33,7 @@ __all__ = [
     "RepositoryKnowledgeConfig",
     "RepositoryKnowledgeError",
     "RepositoryKnowledgeService",
+    "RepositoryKnowledgeStatus",
     "RetrievalMode",
     "SearchResponse",
 ]
-

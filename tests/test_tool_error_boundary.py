@@ -87,6 +87,35 @@ class RepositoryKnowledgeToolTests(unittest.TestCase):
             [("permission middleware", 7)],
         )
 
+    def test_tool_prepares_service_even_when_it_is_already_ready(self) -> None:
+        class FakeRepositoryKnowledge:
+            is_ready = True
+
+            def __init__(self) -> None:
+                self.prepare_count = 0
+
+            def prepare(self) -> None:
+                self.prepare_count += 1
+
+            def search(self, query: str, *, top_k: int):
+                return SimpleNamespace(context="fresh repository evidence")
+
+        repository_knowledge = FakeRepositoryKnowledge()
+        runtime = SimpleNamespace(
+            context=SimpleNamespace(
+                repository_knowledge=repository_knowledge,
+            )
+        )
+
+        result = search_repository_knowledge.func(
+            query="permission middleware",
+            runtime=runtime,
+            top_k=5,
+        )
+
+        self.assertEqual(result, "fresh repository evidence")
+        self.assertEqual(repository_knowledge.prepare_count, 1)
+
     def test_expected_prepare_error_bubbles_out_of_tool(self) -> None:
         expected_error = RepositoryChangedDuringIndexingError(
             "repository kept changing"

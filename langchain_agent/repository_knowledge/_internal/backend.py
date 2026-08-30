@@ -210,10 +210,13 @@ class PythonRepositoryKnowledgeBackend:
 
         if storage.exists():
             try:
-                index_result = self._load_index(index_directory)
+                index_result, repository_snapshot = self._load_index(
+                    index_directory
+                )
 
                 return PreparedIndex(
                     index=index_result,
+                    repository_snapshot=repository_snapshot,
                     source="disk",
                 )
 
@@ -223,13 +226,14 @@ class PythonRepositoryKnowledgeBackend:
             ) as error:
                 rebuild_reason = str(error)
 
-        index_result = self._rebuild_and_save(
+        index_result, repository_snapshot = self._rebuild_and_save(
             index_directory=index_directory,
             max_attempts=max_attempts,
         )
 
         return PreparedIndex(
             index=index_result,
+            repository_snapshot=repository_snapshot,
             source="rebuilt",
             rebuild_reason=rebuild_reason,
         )
@@ -270,7 +274,7 @@ class PythonRepositoryKnowledgeBackend:
         self,
         index_directory: str | Path,
         max_attempts: int = 2,
-    ) -> IndexBuildStats:
+    ) -> tuple[IndexBuildStats, RepositorySnapshot]:
         if max_attempts <= 0:
             raise ValueError("max_attempts must be greater than 0")
 
@@ -288,7 +292,7 @@ class PythonRepositoryKnowledgeBackend:
                         repository_files=snapshot_after,
                     )
 
-                return index_result
+                return index_result, snapshot_after
 
             snapshot_before = snapshot_after
 
@@ -328,7 +332,7 @@ class PythonRepositoryKnowledgeBackend:
     def _load_index(
         self,
         index_directory: str | Path,
-    ) -> IndexBuildStats:
+    ) -> tuple[IndexBuildStats, RepositorySnapshot]:
         storage = RepositoryIndexStorage(index_directory)
 
         # 这里返回的索引已经是：
@@ -351,11 +355,14 @@ class PythonRepositoryKnowledgeBackend:
 
         self.bm25_index.replace(loaded_index.chunks)
 
-        return IndexBuildStats(
-            source=str(self.repository_path),
-            document_count=(loaded_index.manifest["document_count"]),
-            chunk_count=len(loaded_index.chunks),
-            vector_dimension=(self.embedding_client.dimension),
+        return (
+            IndexBuildStats(
+                source=str(self.repository_path),
+                document_count=(loaded_index.manifest["document_count"]),
+                chunk_count=len(loaded_index.chunks),
+                vector_dimension=(self.embedding_client.dimension),
+            ),
+            current_repository_files,
         )
 
     def build_repository_snapshot(

@@ -14,6 +14,9 @@ class IndexBuildError(RepositoryKnowledgeError):
     """A repository index could not be prepared."""
 
 
+class EmbeddingError(RepositoryKnowledgeError):
+    """The configured embedding adapter could not encode repository text."""
+
+
 class RepositoryChangedDuringIndexingError(IndexBuildError):
     """The repository kept changing while a stable index was being built."""
-

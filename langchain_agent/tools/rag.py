@@ -34,8 +34,7 @@ def search_repository_knowledge(
 
     repository_knowledge = runtime.context.repository_knowledge
 
-    if not repository_knowledge.is_ready:
-        repository_knowledge.prepare()
+    repository_knowledge.prepare()
 
     response = repository_knowledge.search(
         query,

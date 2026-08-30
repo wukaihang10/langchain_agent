@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from threading import RLock
 from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import NDArray
+
+from langchain_agent.repository_knowledge.errors import EmbeddingError
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
@@ -51,6 +54,7 @@ class SentenceTransformerEmbeddingClient:
         self.device = device
         self._model: SentenceTransformer | None = None
         self._dimension: int | None = None
+        self._lock = RLock()
 
     @property
     def model_id(self) -> str:
@@ -58,17 +62,26 @@ class SentenceTransformerEmbeddingClient:
 
     @property
     def dimension(self) -> int:
-        if self._dimension is None:
-            dimension = self._get_model().get_embedding_dimension()
+        with self._lock:
+            if self._dimension is None:
+                try:
+                    dimension = self._get_model().get_embedding_dimension()
+                except EmbeddingError:
+                    raise
+                except Exception as error:
+                    raise EmbeddingError(
+                        "Embedding model failed to report its dimension: "
+                        f"{error}"
+                    ) from error
 
-            if dimension is None:
-                raise ValueError(
-                    "The embedding model did not provide an embedding dimension"
-                )
+                if dimension is None:
+                    raise EmbeddingError(
+                        "The embedding model did not provide an embedding dimension"
+                    )
 
-            self._dimension = int(dimension)
+                self._dimension = int(dimension)
 
-        return self._dimension
+            return self._dimension
 
     def embed_documents(
         self,
@@ -120,42 +133,59 @@ class SentenceTransformerEmbeddingClient:
         self,
         texts: Sequence[str],
     ) -> FloatMatrix:
-        embeddings = self._get_model().encode(
-            list(texts),
-            batch_size=self.batch_size,
-            show_progress_bar=self.show_progress_bar,
-            convert_to_numpy=True,
-            normalize_embeddings=self.normalize_embeddings,
-        )
+        with self._lock:
+            try:
+                embeddings = self._get_model().encode(
+                    list(texts),
+                    batch_size=self.batch_size,
+                    show_progress_bar=self.show_progress_bar,
+                    convert_to_numpy=True,
+                    normalize_embeddings=self.normalize_embeddings,
+                )
+            except EmbeddingError:
+                raise
+            except Exception as error:
+                raise EmbeddingError(
+                    f"Embedding model failed to encode text: {error}"
+                ) from error
 
-        matrix = np.asarray(
-            embeddings,
-            dtype=np.float32,
-        )
-
-        if matrix.ndim == 1:
-            matrix = matrix.reshape(1, -1)
-
-        if matrix.ndim != 2:
-            raise ValueError("Embedding result must be a two-dimensional matrix")
-
-        if matrix.shape[1] != self.dimension:
-            raise ValueError(
-                f"Unexpected embedding dimension: expected {self.dimension}, got {matrix.shape[1]}"
+            matrix = np.asarray(
+                embeddings,
+                dtype=np.float32,
             )
 
-        return matrix
+            if matrix.ndim == 1:
+                matrix = matrix.reshape(1, -1)
+
+            if matrix.ndim != 2:
+                raise EmbeddingError(
+                    "Embedding result must be a two-dimensional matrix"
+                )
+
+            if matrix.shape[1] != self.dimension:
+                raise EmbeddingError(
+                    "Unexpected embedding dimension: "
+                    f"expected {self.dimension}, got {matrix.shape[1]}"
+                )
+
+            return matrix
 
     def _get_model(self) -> SentenceTransformer:
-        if self._model is None:
-            from sentence_transformers import SentenceTransformer
+        with self._lock:
+            if self._model is None:
+                try:
+                    from sentence_transformers import SentenceTransformer
 
-            self._model = SentenceTransformer(
-                self.model_name,
-                device=self.device,
-            )
+                    self._model = SentenceTransformer(
+                        self.model_name,
+                        device=self.device,
+                    )
+                except Exception as error:
+                    raise EmbeddingError(
+                        f"Failed to load embedding model {self.model_name!r}: {error}"
+                    ) from error
 
-        return self._model
+            return self._model
 
     def _build_query_input(
         self,

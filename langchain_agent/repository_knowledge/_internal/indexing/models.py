@@ -1,6 +1,10 @@
 from dataclasses import dataclass
 from typing import Literal
 
+from langchain_agent.repository_knowledge._internal.indexing.repository_snapshot import (
+    RepositorySnapshot,
+)
+
 
 @dataclass
 class IndexBuildStats:
@@ -21,5 +25,6 @@ class PreparedIndex:
     """Internal result of loading or rebuilding an index."""
 
     index: IndexBuildStats
+    repository_snapshot: RepositorySnapshot
     source: Literal["disk", "rebuilt"]
     rebuild_reason: str | None = None

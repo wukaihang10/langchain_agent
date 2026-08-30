@@ -1,6 +1,16 @@
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Literal
+
+
+class RepositoryKnowledgeStatus(str, Enum):
+    """Observable lifecycle state of one repository knowledge service."""
+
+    UNPREPARED = "unprepared"
+    PREPARING = "preparing"
+    READY = "ready"
+    FAILED = "failed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,4 +56,3 @@ class IndexReadyResult:
     chunk_count: int
     vector_dimension: int
     rebuild_reason: str | None = None
-
