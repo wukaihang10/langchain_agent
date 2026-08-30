@@ -21,3 +21,15 @@ class EmbeddingClient(Protocol):
 
     def embed_query(self, query: str) -> FloatVector: ...
 
+
+class QueryExpander(Protocol):
+    """Optional retrieval dependency supplied by the application root."""
+
+    def expand(
+        self,
+        query: str,
+        *,
+        limit: int,
+    ) -> Sequence[str]:
+        """Return supplemental queries without repeating the original query."""
+        ...

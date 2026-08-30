@@ -46,6 +46,15 @@ class FakeEmbeddingClient:
         return vector / np.linalg.norm(vector)
 
 
+class RecordingQueryExpander:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    def expand(self, query: str, *, limit: int) -> tuple[str, ...]:
+        self.calls.append((query, limit))
+        return ()
+
+
 def write_python_repository(root: Path, file_name: str, symbol: str) -> None:
     (root / file_name).write_text(
         f"def {symbol}():\n"
@@ -63,6 +72,7 @@ class RepositoryKnowledgeConfigTests(unittest.TestCase):
             {"overlap_lines": -1},
             {"max_context_characters": 0},
             {"max_context_items": 0},
+            {"max_query_rewrites": 0},
         ]
 
         for values in invalid_values:
@@ -157,6 +167,26 @@ class RepositoryKnowledgeServiceTests(unittest.TestCase):
             self.assertEqual(evidence.symbol, "alpha")
             self.assertEqual(evidence.symbol_type, "function")
             self.assertEqual(evidence.start_line, 1)
+
+    def test_search_uses_injected_query_expander_and_configured_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            repository.mkdir()
+            write_python_repository(repository, "alpha.py", "alpha")
+            query_expander = RecordingQueryExpander()
+            service = RepositoryKnowledgeService(
+                repository_path=repository,
+                index_path=root / "agent-cache" / "alpha",
+                embedding_client=FakeEmbeddingClient(),
+                query_expander=query_expander,
+                config=RepositoryKnowledgeConfig(max_query_rewrites=3),
+            )
+            service.prepare()
+
+            service.search("alpha")
+
+            self.assertEqual(query_expander.calls, [("alpha", 3)])
 
     def test_new_service_loads_an_existing_application_cache(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

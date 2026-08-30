@@ -7,9 +7,7 @@ from langchain_agent.repository_knowledge._internal.retrieval.models import (
     SearchResult,
 )
 from langchain_agent.repository_knowledge._internal.source.models import Chunk
-from langchain_agent.repository_knowledge._internal.retrieval.query_expansion import (
-    QueryExpander,
-)
+from langchain_agent.repository_knowledge.ports import QueryExpander
 
 
 class MultiQueryRetriever:
@@ -30,14 +28,18 @@ class MultiQueryRetriever:
         *,
         base_retriever: Retriever,
         query_expander: QueryExpander,
+        max_query_rewrites: int = 2,
         rrf_k: int = 60,
     ) -> None:
         if rrf_k <= 0:
             raise ValueError("rrf_k must be greater than 0")
+        if max_query_rewrites <= 0:
+            raise ValueError("max_query_rewrites must be greater than 0")
 
         self.base_retriever = base_retriever
 
         self.query_expander = query_expander
+        self.max_query_rewrites = max_query_rewrites
 
         self.rrf_k = rrf_k
 
@@ -145,7 +147,15 @@ class MultiQueryRetriever:
     ) -> list[str]:
         """Combine the required original query with optional rewrites."""
 
-        rewrites = self.query_expander.expand(original_query)
+        rewrites = self.query_expander.expand(
+            original_query,
+            limit=self.max_query_rewrites,
+        )
+
+        if isinstance(rewrites, str):
+            raise TypeError("query expander must return a sequence of strings")
+
+        rewrites = tuple(rewrites)[: self.max_query_rewrites]
 
         queries = [
             original_query,

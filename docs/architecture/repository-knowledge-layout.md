@@ -12,6 +12,8 @@ stability, not by Python construct type.
 - `ports.py` contains required external dependency protocols.
 - `embedding.py` provides one concrete embedding adapter for application
   composition.
+- `query_expansion.py` provides identity, LLM-backed, and fail-open query
+  expansion adapters for application composition.
 
 Agent tools, CLI code, and future Web adapters may depend on this layer. They
 must not import `_internal` modules.

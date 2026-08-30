@@ -48,10 +48,8 @@ from langchain_agent.repository_knowledge._internal.retrieval.hybrid_retriever i
     HybridRetriever,
 )
 
-from langchain_agent.repository_knowledge._internal.retrieval.query_expansion import (
-    IdentityQueryExpander,
-    QueryExpander,
-)
+from langchain_agent.repository_knowledge.ports import EmbeddingClient, QueryExpander
+from langchain_agent.repository_knowledge.query_expansion import IdentityQueryExpander
 
 from langchain_agent.repository_knowledge._internal.retrieval.multi_query_retriever import (
     MultiQueryRetriever,
@@ -62,7 +60,6 @@ from langchain_agent.repository_knowledge._internal.retrieval.reranker import (
     RerankingRetriever,
 )
 from langchain_agent.repository_knowledge.config import RetrievalMode
-from langchain_agent.repository_knowledge.ports import EmbeddingClient
 
 
 class PythonRepositoryKnowledgeBackend:
@@ -87,6 +84,7 @@ class PythonRepositoryKnowledgeBackend:
         device: str | None = None,
         retrieval_mode: RetrievalMode = "fast",
         query_expander: QueryExpander | None = None,
+        max_query_rewrites: int = 2,
     ) -> None:
         self.repository_path = Path(repository_path).resolve()
 
@@ -165,6 +163,7 @@ class PythonRepositoryKnowledgeBackend:
         self.multi_query_retriever = MultiQueryRetriever(
             base_retriever=(self.hybrid_retriever),
             query_expander=(self.query_expander),
+            max_query_rewrites=max_query_rewrites,
             rrf_k=60,
         )
 

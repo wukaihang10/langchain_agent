@@ -35,6 +35,9 @@ from langchain_agent.repository_knowledge.embedding import (
     SentenceTransformerEmbeddingClient,
 )
 from langchain_agent.repository_knowledge import (
+    FallbackQueryExpander,
+    IdentityQueryExpander,
+    LLMQueryExpander,
     RepositoryKnowledgeConfig,
     RepositoryKnowledgeService,
 )
@@ -439,6 +442,11 @@ async def main():
     session_store = SessionStore(SESSION_PATH)
 
     embedding_client: SentenceTransformerEmbeddingClient | None = None
+    query_expansion_model = create_model(thinking=False)
+    query_expander = FallbackQueryExpander(
+        primary=LLMQueryExpander(model=query_expansion_model),
+        fallback=IdentityQueryExpander(),
+    )
     repository_services: dict[Path, RepositoryKnowledgeService] = {}
 
     def get_repository_knowledge(
@@ -461,7 +469,11 @@ async def main():
             repository_path=resolved_path,
             index_path=(INDEX_ROOT / repository_cache_key(resolved_path)),
             embedding_client=embedding_client,
-            config=RepositoryKnowledgeConfig(retrieval_mode="fast"),
+            query_expander=query_expander,
+            config=RepositoryKnowledgeConfig(
+                retrieval_mode="fast",
+                max_query_rewrites=2,
+            ),
         )
         repository_services[resolved_path] = service
 

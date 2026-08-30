@@ -16,7 +16,7 @@ from langchain_agent.repository_knowledge.models import (
     RepositoryKnowledgeStatus,
     SearchResponse,
 )
-from langchain_agent.repository_knowledge.ports import EmbeddingClient
+from langchain_agent.repository_knowledge.ports import EmbeddingClient, QueryExpander
 
 
 class RepositoryKnowledgeService:
@@ -34,11 +34,13 @@ class RepositoryKnowledgeService:
         repository_path: str | Path,
         index_path: str | Path,
         embedding_client: EmbeddingClient,
+        query_expander: QueryExpander | None = None,
         config: RepositoryKnowledgeConfig | None = None,
     ) -> None:
         self.repository_path = self._resolve_repository(repository_path)
         self.index_path = Path(index_path).expanduser().resolve()
         self.embedding_client = embedding_client
+        self.query_expander = query_expander
         self.config = config or RepositoryKnowledgeConfig()
         self._backend = None
         self._prepared_snapshot = None
@@ -163,6 +165,8 @@ class RepositoryKnowledgeService:
             max_context_characters=self.config.max_context_characters,
             max_context_items=self.config.max_context_items,
             retrieval_mode=self.config.retrieval_mode,
+            query_expander=self.query_expander,
+            max_query_rewrites=self.config.max_query_rewrites,
         )
 
     def _to_ready_result(self, prepared_index) -> IndexReadyResult:

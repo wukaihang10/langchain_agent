@@ -14,6 +14,7 @@ class RepositoryKnowledgeConfig:
     overlap_lines: int = 8
     max_context_characters: int = 8000
     max_context_items: int = 5
+    max_query_rewrites: int = 2
 
     def __post_init__(self) -> None:
         if self.retrieval_mode not in ("fast", "quality"):
@@ -26,4 +27,5 @@ class RepositoryKnowledgeConfig:
             raise ValueError("max_context_characters must be greater than 0")
         if self.max_context_items <= 0:
             raise ValueError("max_context_items must be greater than 0")
-
+        if self.max_query_rewrites <= 0:
+            raise ValueError("max_query_rewrites must be greater than 0")

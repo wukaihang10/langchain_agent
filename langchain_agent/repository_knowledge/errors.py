@@ -18,5 +18,9 @@ class EmbeddingError(RepositoryKnowledgeError):
     """The configured embedding adapter could not encode repository text."""
 
 
+class QueryExpansionError(RepositoryKnowledgeError):
+    """The configured query expander could not produce supplemental queries."""
+
+
 class RepositoryChangedDuringIndexingError(IndexBuildError):
     """The repository kept changing while a stable index was being built."""

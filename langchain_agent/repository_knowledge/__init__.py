@@ -9,6 +9,7 @@ from langchain_agent.repository_knowledge.errors import (
     IndexBuildError,
     IndexNotReadyError,
     InvalidRepositoryError,
+    QueryExpansionError,
     RepositoryChangedDuringIndexingError,
     RepositoryKnowledgeError,
 )
@@ -18,17 +19,27 @@ from langchain_agent.repository_knowledge.models import (
     RepositoryKnowledgeStatus,
     SearchResponse,
 )
-from langchain_agent.repository_knowledge.ports import EmbeddingClient
+from langchain_agent.repository_knowledge.ports import EmbeddingClient, QueryExpander
+from langchain_agent.repository_knowledge.query_expansion import (
+    FallbackQueryExpander,
+    IdentityQueryExpander,
+    LLMQueryExpander,
+)
 from langchain_agent.repository_knowledge.service import RepositoryKnowledgeService
 
 __all__ = [
     "EmbeddingClient",
     "EmbeddingError",
     "Evidence",
+    "FallbackQueryExpander",
     "IndexBuildError",
     "IndexNotReadyError",
     "IndexReadyResult",
     "InvalidRepositoryError",
+    "IdentityQueryExpander",
+    "LLMQueryExpander",
+    "QueryExpander",
+    "QueryExpansionError",
     "RepositoryChangedDuringIndexingError",
     "RepositoryKnowledgeConfig",
     "RepositoryKnowledgeError",
