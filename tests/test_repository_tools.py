@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from langchain_agent.tools.errors import RepositoryToolError
+from langchain_agent.tools.repository_errors import RepositoryToolError
 from langchain_agent.tools.repository import (
     list_files,
     read_file,

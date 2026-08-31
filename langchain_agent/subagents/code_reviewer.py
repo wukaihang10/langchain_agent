@@ -1,12 +1,12 @@
 from langchain_core.language_models import BaseChatModel
 
-from langchain_agent.tool_errors import ToolErrorMiddleware
+from langchain_agent.harness.middleware.tool_errors import ToolErrorMiddleware
 from langchain_agent.tools.git_diff import get_git_diff
 from langchain_agent.tools.repository import (
     read_file,
     search_code,
 )
-from langchain_agent.tools.rag import search_repository_knowledge
+from langchain_agent.tools.repository_knowledge import search_repository_knowledge
 
 CODE_REVIEWER_DESCRIPTION = """
 Review existing repository changes for concrete, actionable defects.

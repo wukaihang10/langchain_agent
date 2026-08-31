@@ -8,9 +8,9 @@ from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
-from langchain_agent.permissions.policy import check_permission
-from langchain_agent.permissions.registry import ToolPolicyRegistry
-from langchain_agent.permissions.types import PermissionAction
+from langchain_agent.harness.permissions.policy import check_permission
+from langchain_agent.harness.permissions.registry import ToolPolicyRegistry
+from langchain_agent.harness.permissions.models import PermissionAction
 
 AsyncToolHandler = Callable[
     [ToolCallRequest],

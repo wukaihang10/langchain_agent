@@ -1,4 +1,4 @@
-from langchain_agent.permissions.types import ToolPolicy
+from langchain_agent.harness.permissions.models import ToolPolicy
 
 
 class ToolPolicyRegistry:

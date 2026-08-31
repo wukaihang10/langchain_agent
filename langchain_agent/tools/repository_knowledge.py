@@ -3,7 +3,7 @@ from typing import Annotated
 from langchain.tools import ToolRuntime, tool
 from pydantic import Field, StringConstraints
 
-from langchain_agent.context import AgentContext
+from langchain_agent.app.context import AgentContext
 from langchain_agent.repository_knowledge import SearchResponse
 
 

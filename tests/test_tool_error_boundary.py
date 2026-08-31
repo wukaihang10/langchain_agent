@@ -12,9 +12,9 @@ from langchain_agent.repository_knowledge import (
     RepositoryChangedDuringIndexingError,
     RepositoryKnowledgeError,
 )
-from langchain_agent.tool_errors import ToolErrorMiddleware
-from langchain_agent.tools.errors import RepositoryToolError
-from langchain_agent.tools.rag import search_repository_knowledge
+from langchain_agent.harness.middleware.tool_errors import ToolErrorMiddleware
+from langchain_agent.tools.repository_errors import RepositoryToolError
+from langchain_agent.tools.repository_knowledge import search_repository_knowledge
 
 
 @tool

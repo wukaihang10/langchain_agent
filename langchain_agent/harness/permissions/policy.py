@@ -1,6 +1,6 @@
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
-from langchain_agent.permissions.types import (
+from langchain_agent.harness.permissions.models import (
     PermissionAction,
     PermissionDecision,
     PermissionMode,
@@ -8,7 +8,7 @@ from langchain_agent.permissions.types import (
     ToolRisk,
     ToolPolicy,
 )
-from langchain_agent.context import AgentContext
+from langchain_agent.app.context import AgentContext
 
 TRUSTED_METADATA_KEYS = {
     "category",

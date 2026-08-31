@@ -5,7 +5,7 @@ from httpx import NetworkError, TimeoutException
 from langchain.agents.middleware import ToolRetryMiddleware
 from langchain_core.tools import BaseTool
 
-from langchain_agent.permissions.registry import ToolPolicyRegistry
+from langchain_agent.harness.permissions.registry import ToolPolicyRegistry
 
 _TRANSIENT_TRANSPORT_ERRORS = (
     TimeoutError,
@@ -16,6 +16,14 @@ _TRANSIENT_TRANSPORT_ERRORS = (
     ClosedResourceError,
     EndOfStream,
 )
+
+
+class MCPRetryMiddleware(ToolRetryMiddleware):
+    """Retry explicitly safe MCP tools."""
+
+
+class MCPNoRetryFailureMiddleware(ToolRetryMiddleware):
+    """Expose uncertain MCP transport failures without retrying."""
 
 
 def is_transient_mcp_error(error: Exception) -> bool:
@@ -65,7 +73,7 @@ def build_mcp_retry_middleware(
     backoff_factor: float = 2.0,
     max_delay: float = 4.0,
     jitter: bool = True,
-) -> ToolRetryMiddleware | None:
+) -> MCPRetryMiddleware | None:
     """Build retries only for explicitly safe, idempotent MCP tools."""
 
     retryable_tools = []
@@ -82,7 +90,7 @@ def build_mcp_retry_middleware(
     if not retryable_tools:
         return None
 
-    return ToolRetryMiddleware(
+    return MCPRetryMiddleware(
         tools=retryable_tools,
         max_retries=max_retries,
         retry_on=is_transient_mcp_error,
@@ -98,7 +106,7 @@ def build_mcp_no_retry_failure_middleware(
     *,
     mcp_tools: Sequence[BaseTool],
     policy_registry: ToolPolicyRegistry,
-) -> ToolRetryMiddleware | None:
+) -> MCPNoRetryFailureMiddleware | None:
     """Expose unsafe or unclassified MCP transport failures without retrying."""
 
     no_retry_tools = []
@@ -112,7 +120,7 @@ def build_mcp_no_retry_failure_middleware(
     if not no_retry_tools:
         return None
 
-    return ToolRetryMiddleware(
+    return MCPNoRetryFailureMiddleware(
         tools=no_retry_tools,
         max_retries=0,
         retry_on=is_transient_mcp_error,

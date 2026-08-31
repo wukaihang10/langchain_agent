@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from dotenv import load_dotenv
 
-from langchain_agent.permissions.registry import ToolPolicy
+from langchain_agent.harness.permissions.models import ToolPolicy
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 

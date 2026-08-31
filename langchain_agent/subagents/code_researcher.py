@@ -1,14 +1,14 @@
 from langchain.agents import create_agent
 
-from langchain_agent.context import AgentContext
-from langchain_agent.tool_errors import ToolErrorMiddleware
+from langchain_agent.app.context import AgentContext
+from langchain_agent.harness.middleware.tool_errors import ToolErrorMiddleware
 from langchain_agent.tools.repository import (
     list_files,
     read_file,
     search_code,
     summarize_repository,
 )
-from langchain_agent.tools.rag import (
+from langchain_agent.tools.repository_knowledge import (
     search_repository_knowledge,
 )
 

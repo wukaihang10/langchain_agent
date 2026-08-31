@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from langchain_agent.permissions.types import PermissionMode
+from langchain_agent.harness.permissions.models import PermissionMode
 from langchain_agent.repository_knowledge import RepositoryKnowledgeService
 
 

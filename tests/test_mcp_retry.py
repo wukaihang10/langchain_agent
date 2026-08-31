@@ -3,18 +3,20 @@ from types import SimpleNamespace
 
 from langchain_core.messages import ToolMessage
 
-from langchain_agent.permissions.registry import ToolPolicyRegistry
-from langchain_agent.permissions.types import (
+from langchain_agent.harness.permissions.registry import ToolPolicyRegistry
+from langchain_agent.harness.permissions.models import (
     ToolCategory,
     ToolPolicy,
     ToolRisk,
 )
-from langchain_agent.tool_retry import (
+from langchain_agent.harness.middleware.mcp_retry import (
+    MCPNoRetryFailureMiddleware,
+    MCPRetryMiddleware,
     build_mcp_no_retry_failure_middleware,
     build_mcp_retry_middleware,
     is_transient_mcp_error,
 )
-from langchain_agent.tools.errors import RepositoryToolError
+from langchain_agent.tools.repository_errors import RepositoryToolError
 
 
 def build_policy(*, idempotent: bool, side_effect: bool) -> ToolPolicy:
@@ -211,6 +213,37 @@ class MCPRetryMiddlewareTests(unittest.IsolatedAsyncioTestCase):
 
 
 class MCPRetrySelectionTests(unittest.TestCase):
+    def test_mixed_retry_policies_use_unique_middleware_names(self) -> None:
+        safe_tool = SimpleNamespace(name="demo_search")
+        unknown_tool = SimpleNamespace(name="github_search")
+        registry = ToolPolicyRegistry(
+            {
+                "demo_search": build_policy(
+                    idempotent=True,
+                    side_effect=False,
+                )
+            }
+        )
+
+        retry_middleware = build_mcp_retry_middleware(
+            mcp_tools=[safe_tool, unknown_tool],
+            policy_registry=registry,
+        )
+        no_retry_middleware = build_mcp_no_retry_failure_middleware(
+            mcp_tools=[safe_tool, unknown_tool],
+            policy_registry=registry,
+        )
+
+        self.assertIsInstance(retry_middleware, MCPRetryMiddleware)
+        self.assertIsInstance(
+            no_retry_middleware,
+            MCPNoRetryFailureMiddleware,
+        )
+        self.assertNotEqual(
+            retry_middleware.name,
+            no_retry_middleware.name,
+        )
+
     def test_no_safe_tools_produces_no_retry_middleware(self) -> None:
         registry = ToolPolicyRegistry(
             {

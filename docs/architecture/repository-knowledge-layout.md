@@ -40,7 +40,8 @@ When adding code, decide where it belongs by asking who owns the behavior:
 3. A component used only to implement indexing or retrieval belongs in the
    matching `_internal` subpackage.
 4. Agent-specific formatting and tool runtime behavior belong in
-   `langchain_agent.tools`, not in repository knowledge.
+   `langchain_agent.tools` (currently `tools/repository_knowledge.py`), not in
+   repository knowledge.
 5. Answer generation belongs in a separate future capability that consumes
    `SearchResponse`; it must not be added to `RepositoryKnowledgeService`.
 

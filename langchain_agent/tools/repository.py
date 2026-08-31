@@ -6,9 +6,9 @@ from typing import Annotated
 from langchain.tools import tool, ToolRuntime
 from pydantic import Field, StringConstraints
 
-from langchain_agent.context import AgentContext
-from langchain_agent.permissions.types import ToolCategory, ToolRisk
-from langchain_agent.tools.errors import RepositoryToolError
+from langchain_agent.app.context import AgentContext
+from langchain_agent.harness.permissions.models import ToolCategory, ToolRisk
+from langchain_agent.tools.repository_errors import RepositoryToolError
 
 MAX_LIST_FILES = 2000
 MAX_READ_CHARS = 10000
@@ -89,9 +89,7 @@ def resolve_repository_root(repository_path: str) -> Path:
     root = Path(repository_path).resolve()
 
     if not root.exists():
-        raise RepositoryToolError(
-            f"Repository path does not exist: {repository_path}"
-        )
+        raise RepositoryToolError(f"Repository path does not exist: {repository_path}")
 
     if not root.is_dir():
         raise RepositoryToolError(
@@ -505,9 +503,7 @@ def write_file(
         )
 
     if not path.parent.is_dir():
-        raise RepositoryToolError(
-            f"Parent directory does not exist: {path.parent}"
-        )
+        raise RepositoryToolError(f"Parent directory does not exist: {path.parent}")
 
     try:
         with path.open("x", encoding="utf-8") as stream:

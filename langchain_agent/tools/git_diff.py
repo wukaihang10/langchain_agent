@@ -1,8 +1,8 @@
 from langchain.tools import tool, ToolRuntime
 
-from langchain_agent.context import AgentContext
-from langchain_agent.git_changes import collect_git_diff, collect_untracked_files
-from langchain_agent.permissions.types import ToolCategory, ToolRisk
+from langchain_agent.app.context import AgentContext
+from langchain_agent.integrations.git import collect_git_diff, collect_untracked_files
+from langchain_agent.harness.permissions.models import ToolCategory, ToolRisk
 
 
 @tool

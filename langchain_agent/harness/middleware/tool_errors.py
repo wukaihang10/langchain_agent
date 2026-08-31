@@ -6,7 +6,7 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
 from langchain_agent.repository_knowledge import RepositoryKnowledgeError
-from langchain_agent.tools.errors import RepositoryToolError
+from langchain_agent.tools.repository_errors import RepositoryToolError
 
 AsyncToolHandler = Callable[
     [ToolCallRequest],

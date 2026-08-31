@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from langchain_agent.model import create_model
+from langchain_agent.integrations.model import create_model
 from langchain_agent.repository_knowledge import QueryExpansionError
 from langchain_agent.repository_knowledge._internal.retrieval.multi_query_retriever import (
     MultiQueryRetriever,
@@ -170,7 +170,7 @@ class ModelFactoryTests(unittest.TestCase):
             "DEEPSEEK_BASE_URL": "https://example.invalid",
         },
     )
-    @patch("langchain_agent.model.ChatDeepSeek")
+    @patch("langchain_agent.integrations.model.ChatDeepSeek")
     def test_query_model_disables_thinking_without_changing_model_name(
         self,
         chat_deepseek,
@@ -196,7 +196,7 @@ class ModelFactoryTests(unittest.TestCase):
             "DEEPSEEK_BASE_URL": "https://example.invalid",
         },
     )
-    @patch("langchain_agent.model.ChatDeepSeek")
+    @patch("langchain_agent.integrations.model.ChatDeepSeek")
     def test_default_model_leaves_thinking_mode_unspecified(self, chat_deepseek):
         create_model()
 

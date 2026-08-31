@@ -1,16 +1,12 @@
 import subprocess
 from pathlib import Path
+from typing import NotRequired, TypedDict
 
-from langchain.agents.middleware import (
-    AgentMiddleware,
-)
-from langgraph.runtime import Runtime
 
-from langchain_agent.context import AgentContext
-from langchain_agent.state import (
-    GitAuditState,
-)
-from langchain_agent.state import FileEdition
+class FileEdition(TypedDict):
+    file_path: str
+    change_type: str
+    old_path: NotRequired[str]
 
 
 def _run_git(
@@ -167,24 +163,3 @@ def ensure_clean_worktree(
             f"before starting a new agent thread: "
             f"{changed_files}"
         )
-
-
-class GitAuditMiddleware(
-    AgentMiddleware[
-        GitAuditState,
-        AgentContext,
-    ]
-):
-    state_schema = GitAuditState
-
-    def after_agent(
-        self,
-        state: GitAuditState,
-        runtime: Runtime[AgentContext],
-    ):
-        audit = collect_file_editions(runtime.context.repository_path)
-
-        return {
-            "edited_file_list": audit.get("edited_file_list", []),
-            "edition_list": audit.get("edition_list", []),
-        }
