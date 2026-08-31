@@ -1,7 +1,5 @@
-import asyncio
-
-from langchain_agent.cli.app import main
+from langchain_agent.cli.app import cli
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    cli()

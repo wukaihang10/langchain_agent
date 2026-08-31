@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PACKAGE_ROOT = PROJECT_ROOT / "langchain_agent"
+PACKAGE_ROOT = PROJECT_ROOT / "src" / "langchain_agent"
 FACADE_PATH = PACKAGE_ROOT / "repository_knowledge" / "service.py"
 INTERNAL_ROOT = PACKAGE_ROOT / "repository_knowledge" / "_internal"
 

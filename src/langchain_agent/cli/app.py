@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 from dataclasses import replace
 
 from prompt_toolkit import PromptSession
@@ -249,3 +250,8 @@ async def main(argv: list[str] | None = None) -> None:
 
     async with bootstrap_application(config) as application:
         await run_cli(application)
+
+
+def cli() -> None:
+    """Run the asynchronous CLI from a synchronous console-script entry point."""
+    asyncio.run(main())

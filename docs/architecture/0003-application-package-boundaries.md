@@ -29,7 +29,12 @@ Agent tool adapter into part of the capability implementation.
 - `persistence/` owns session metadata and LangGraph checkpoints.
 - `repository_knowledge/` keeps its existing public import path and internal
   architecture unchanged.
-- The repository-root `main.py` is only an executable shim for `cli.app.main`.
+- Importable application code uses the `src` layout under
+  `src/langchain_agent/`. The `src/` directory is a packaging container; the
+  stable Python import namespace remains `langchain_agent`.
+- The repository-root `pyproject.toml` owns dependency declarations, package
+  discovery, and the `langchain-agent` console-script entry point.
+- The repository-root `main.py` is only an executable shim for `cli.app.cli`.
 
 The composition root is `app/bootstrap.py`. `app/agent.py` receives constructed
 dependencies and defines the standard tools, middleware order, subagents,
@@ -52,6 +57,8 @@ These rules are enforced by architecture tests.
 
 - Evaluations can construct the production Agent with fake models and an
   in-memory checkpointer without starting the CLI or reading MCP configuration.
+- Tests and external callers import the installed package rather than relying
+  on the repository root being present on `sys.path`.
 - Runtime resource ownership is visible in one composition root.
 - Failure, retry, permission, and persistence semantics retain their existing
   owners while becoming easier to test independently.
