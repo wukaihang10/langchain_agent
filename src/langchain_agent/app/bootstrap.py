@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
+from dotenv import load_dotenv
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from langchain_agent.app.agent import NATIVE_TOOLS, build_agent
@@ -45,6 +46,7 @@ async def bootstrap_application(
     config: AppConfig,
 ) -> AsyncIterator[Application]:
     config.paths.ensure_directories()
+    load_dotenv(dotenv_path=config.paths.environment_path, override=False)
     session_store = SessionStore(config.paths.session_path)
 
     query_expander = FallbackQueryExpander(

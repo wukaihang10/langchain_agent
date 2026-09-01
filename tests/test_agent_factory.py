@@ -116,6 +116,7 @@ class AgentFactoryTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result["messages"][-1].content, "factory response")
+        self.assertEqual(result["git_audit_status"], "available")
 
 
 if __name__ == "__main__":

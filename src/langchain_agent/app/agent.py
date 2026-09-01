@@ -15,7 +15,9 @@ from langchain_agent.harness.middleware.mcp_retry import (
     build_mcp_no_retry_failure_middleware,
     build_mcp_retry_middleware,
 )
-from langchain_agent.harness.middleware.tool_errors import ToolErrorMiddleware
+from langchain_agent.harness.middleware.tool_errors import (
+    build_repository_tool_error_middleware,
+)
 from langchain_agent.harness.permissions.middleware import (
     PermissionEnforcementMiddleware,
     build_hitl_middleware,
@@ -110,7 +112,7 @@ def build_agent(
             if mcp_no_retry_failure_middleware is not None
             else []
         ),
-        ToolErrorMiddleware(),
+        build_repository_tool_error_middleware(),
         GitAuditMiddleware(),
     ]
 

@@ -2,6 +2,7 @@ import unittest
 from types import SimpleNamespace
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import ToolErrorMiddleware
 from langchain.tools import tool
 from langchain_core.language_models.fake_chat_models import (
     FakeMessagesListChatModel,
@@ -12,7 +13,10 @@ from langchain_agent.repository_knowledge import (
     RepositoryChangedDuringIndexingError,
     RepositoryKnowledgeError,
 )
-from langchain_agent.harness.middleware.tool_errors import ToolErrorMiddleware
+from langchain_agent.harness.middleware.tool_errors import (
+    build_repository_tool_error_middleware,
+    format_repository_tool_error,
+)
 from langchain_agent.tools.repository_errors import RepositoryToolError
 from langchain_agent.tools.repository_knowledge import search_repository_knowledge
 
@@ -116,7 +120,7 @@ class RepositoryKnowledgeToolTests(unittest.TestCase):
         self.assertEqual(result, "fresh repository evidence")
         self.assertEqual(repository_knowledge.prepare_count, 1)
 
-    def test_expected_prepare_error_bubbles_out_of_tool(self) -> None:
+    def test_expected_prepare_error_becomes_repository_tool_error(self) -> None:
         expected_error = RepositoryChangedDuringIndexingError(
             "repository kept changing"
         )
@@ -133,7 +137,30 @@ class RepositoryKnowledgeToolTests(unittest.TestCase):
             )
         )
 
-        with self.assertRaises(RepositoryChangedDuringIndexingError) as raised:
+        with self.assertRaises(RepositoryToolError) as raised:
+            search_repository_knowledge.func(
+                query="permission middleware",
+                runtime=runtime,
+                top_k=5,
+            )
+
+        self.assertIs(raised.exception.__cause__, expected_error)
+        self.assertIn("repository kept changing", str(raised.exception))
+
+    def test_unexpected_prepare_error_is_not_wrapped(self) -> None:
+        expected_error = KeyError("backend")
+
+        class BrokenRepositoryKnowledge:
+            def prepare(self) -> None:
+                raise expected_error
+
+        runtime = SimpleNamespace(
+            context=SimpleNamespace(
+                repository_knowledge=BrokenRepositoryKnowledge(),
+            )
+        )
+
+        with self.assertRaises(KeyError) as raised:
             search_repository_knowledge.func(
                 query="permission middleware",
                 runtime=runtime,
@@ -145,8 +172,9 @@ class RepositoryKnowledgeToolTests(unittest.TestCase):
 
 class ToolErrorMiddlewareTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.middleware = ToolErrorMiddleware()
+        self.middleware = build_repository_tool_error_middleware()
         self.request = SimpleNamespace(
+            tool=None,
             tool_call={
                 "id": "call-1",
                 "name": "search_repository_knowledge",
@@ -154,9 +182,35 @@ class ToolErrorMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-    async def test_expected_domain_error_becomes_tool_message(self) -> None:
+    def test_builder_uses_official_langchain_middleware(self) -> None:
+        self.assertIsInstance(self.middleware, ToolErrorMiddleware)
+
+    def test_policy_formats_only_repository_tool_errors(self) -> None:
+        self.assertEqual(
+            format_repository_tool_error(
+                RepositoryToolError("file does not exist"),
+                self.request,
+            ),
+            "Repository tool `search_repository_knowledge` failed: "
+            "file does not exist",
+        )
+        self.assertIsNone(
+            format_repository_tool_error(KeyError("context"), self.request)
+        )
+
+    async def test_capability_error_must_be_translated_by_tool_adapter(self) -> None:
         async def failing_handler(request):
             raise RepositoryKnowledgeError("repository is unavailable")
+
+        with self.assertRaises(RepositoryKnowledgeError):
+            await self.middleware.awrap_tool_call(
+                self.request,
+                failing_handler,
+            )
+
+    async def test_expected_repository_tool_error_becomes_tool_message(self) -> None:
+        async def failing_handler(request):
+            raise RepositoryToolError("file does not exist")
 
         result = await self.middleware.awrap_tool_call(
             self.request,
@@ -165,14 +219,13 @@ class ToolErrorMiddlewareTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsInstance(result, ToolMessage)
         self.assertEqual(result.status, "error")
-        self.assertEqual(result.tool_call_id, "call-1")
-        self.assertIn("repository is unavailable", result.content)
+        self.assertIn("file does not exist", result.content)
 
-    async def test_expected_repository_tool_error_becomes_tool_message(self) -> None:
-        async def failing_handler(request):
+    def test_sync_tool_error_path_is_supported(self) -> None:
+        def failing_handler(request):
             raise RepositoryToolError("file does not exist")
 
-        result = await self.middleware.awrap_tool_call(
+        result = self.middleware.wrap_tool_call(
             self.request,
             failing_handler,
         )
@@ -212,7 +265,7 @@ class AgentToolErrorIntegrationTests(unittest.IsolatedAsyncioTestCase):
         agent = create_agent(
             model=model,
             tools=[failing_repository_tool],
-            middleware=[ToolErrorMiddleware()],
+            middleware=[build_repository_tool_error_middleware()],
         )
 
         result = await agent.ainvoke(

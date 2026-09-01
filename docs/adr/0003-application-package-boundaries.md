@@ -1,0 +1,3 @@
+# Application package boundaries
+
+Application composition is kept separate from interfaces and capabilities: the CLI owns user interaction, the harness owns cross-cutting Agent policies, tools adapt capabilities to LangChain, integrations own external-system implementations, persistence owns durable session and checkpoint state, and repository knowledge remains an independent capability. Dependencies should not flow from capabilities back into CLI, harness, or application composition; we chose these boundaries so the production Agent can be assembled with injected dependencies for evaluation and so unrelated runtime responsibilities do not collapse back into a single executable layer.

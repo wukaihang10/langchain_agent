@@ -1,8 +1,13 @@
 from langchain.tools import tool, ToolRuntime
 
 from langchain_agent.app.context import AgentContext
-from langchain_agent.integrations.git import collect_git_diff, collect_untracked_files
+from langchain_agent.integrations.git import (
+    GitIntegrationError,
+    collect_git_diff,
+    collect_untracked_files,
+)
 from langchain_agent.harness.permissions.models import ToolCategory, ToolRisk
+from langchain_agent.tools.repository_errors import RepositoryToolError
 
 
 @tool
@@ -21,14 +26,19 @@ def get_git_diff(
 
     repo_path = runtime.context.repository_path
 
-    diff = collect_git_diff(
-        repo_path,
-        file_path=file_path,
-    )
+    try:
+        diff = collect_git_diff(
+            repo_path,
+            file_path=file_path,
+        )
 
-    untracked_files = (
-        [] if file_path is not None else collect_untracked_files(repo_path)
-    )
+        untracked_files = (
+            [] if file_path is not None else collect_untracked_files(repo_path)
+        )
+    except GitIntegrationError as error:
+        raise RepositoryToolError(
+            f"Could not inspect repository changes with Git: {error}"
+        ) from error
 
     return {
         "success": True,

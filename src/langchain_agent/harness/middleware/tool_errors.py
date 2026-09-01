@@ -1,32 +1,22 @@
-from collections.abc import Awaitable, Callable
+from langchain.agents.middleware import ToolCallRequest, ToolErrorMiddleware
 
-from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import ToolMessage
-from langgraph.prebuilt.tool_node import ToolCallRequest
-from langgraph.types import Command
-
-from langchain_agent.repository_knowledge import RepositoryKnowledgeError
 from langchain_agent.tools.repository_errors import RepositoryToolError
 
-AsyncToolHandler = Callable[
-    [ToolCallRequest],
-    Awaitable[ToolMessage | Command],
-]
+
+def format_repository_tool_error(
+    error: Exception,
+    request: ToolCallRequest,
+) -> str | None:
+    """Return model-safe content for the repository tool error interface."""
+
+    if not isinstance(error, RepositoryToolError):
+        return None
+
+    tool_name = request.tool_call["name"]
+    return f"Repository tool `{tool_name}` failed: {error}"
 
 
-class ToolErrorMiddleware(AgentMiddleware):
-    """Translate expected domain failures into observations the model can act on."""
+def build_repository_tool_error_middleware() -> ToolErrorMiddleware:
+    """Configure LangChain's tool-error mechanism with project policy."""
 
-    async def awrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: AsyncToolHandler,
-    ) -> ToolMessage | Command:
-        try:
-            return await handler(request)
-        except (RepositoryKnowledgeError, RepositoryToolError) as error:
-            return ToolMessage(
-                content=f"Repository tool failed: {error}",
-                tool_call_id=request.tool_call["id"],
-                status="error",
-            )
+    return ToolErrorMiddleware(on_error=format_repository_tool_error)

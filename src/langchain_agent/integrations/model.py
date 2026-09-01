@@ -1,10 +1,7 @@
 import os
 from typing import Any
 
-from dotenv import load_dotenv
 from langchain_deepseek import ChatDeepSeek
-
-load_dotenv()
 
 
 def create_model(

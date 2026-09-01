@@ -1,7 +1,10 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
+from langchain_agent.app.bootstrap import bootstrap_application
 from langchain_agent.app.config import AppConfig, AppPaths
 from langchain_agent.app.repository_knowledge import RepositoryKnowledgeProvider
 from langchain_agent.app.session_runtime import (
@@ -78,7 +81,7 @@ class SessionRuntimeTests(unittest.IsolatedAsyncioTestCase):
             provider = Provider()
             config = AppConfig(
                 permission_mode=PermissionMode.READ_ONLY,
-                paths=AppPaths(root / ".agent"),
+                paths=AppPaths.under(root / ".agent"),
             )
 
             runtime = build_session_runtime(
@@ -135,13 +138,69 @@ class SessionRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AppConfigTests(unittest.TestCase):
-    def test_all_application_paths_derive_from_agent_directory(self):
-        paths = AppPaths(Path("runtime-data"))
+    def test_application_paths_follow_data_config_and_cache_lifetimes(self):
+        paths = AppPaths(
+            data_dir=Path("data"),
+            config_dir=Path("config"),
+            cache_dir=Path("cache"),
+        )
 
-        self.assertEqual(paths.checkpoint_path, Path("runtime-data/checkpoints.sqlite"))
-        self.assertEqual(paths.session_path, Path("runtime-data/sessions.json"))
-        self.assertEqual(paths.mcp_config_path, Path("runtime-data/mcp.json"))
-        self.assertEqual(paths.index_root, Path("runtime-data/indexes"))
+        self.assertEqual(paths.checkpoint_path, Path("data/checkpoints.sqlite"))
+        self.assertEqual(paths.session_path, Path("data/sessions.json"))
+        self.assertEqual(paths.mcp_config_path, Path("config/mcp.json"))
+        self.assertEqual(paths.environment_path, Path("config/.env"))
+        self.assertEqual(paths.index_root, Path("cache/indexes"))
+
+    def test_user_defaults_use_platform_directories(self):
+        platform_paths = SimpleNamespace(
+            user_data_path=Path("C:/app-data"),
+            user_config_path=Path("C:/app-config"),
+            user_cache_path=Path("C:/app-cache"),
+        )
+
+        with patch(
+            "langchain_agent.app.config.PlatformDirs",
+            return_value=platform_paths,
+        ) as platform_dirs:
+            paths = AppPaths.user_default()
+
+        platform_dirs.assert_called_once_with(
+            "langchain-agent",
+            appauthor=False,
+        )
+        self.assertEqual(paths.data_dir, Path("C:/app-data"))
+        self.assertEqual(paths.config_dir, Path("C:/app-config"))
+        self.assertEqual(paths.cache_dir, Path("C:/app-cache"))
+
+    def test_under_co_locates_paths_for_injected_runtimes(self):
+        paths = AppPaths.under(Path("runtime-data"))
+
+        self.assertEqual(paths.data_dir, Path("runtime-data"))
+        self.assertEqual(paths.config_dir, Path("runtime-data"))
+        self.assertEqual(paths.cache_dir, Path("runtime-data"))
+
+
+class ApplicationBootstrapTests(unittest.IsolatedAsyncioTestCase):
+    @patch("langchain_agent.app.bootstrap.create_model")
+    @patch("langchain_agent.app.bootstrap.load_dotenv")
+    async def test_loads_explicit_environment_before_creating_models(
+        self,
+        load_dotenv,
+        create_model,
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            config = AppConfig(paths=AppPaths.under(directory))
+            create_model.side_effect = RuntimeError("model creation reached")
+
+            with self.assertRaisesRegex(RuntimeError, "model creation reached"):
+                async with bootstrap_application(config):
+                    self.fail("bootstrap should stop at model creation")
+
+        load_dotenv.assert_called_once_with(
+            dotenv_path=config.paths.environment_path,
+            override=False,
+        )
+        create_model.assert_called_once_with(thinking=False)
 
 
 if __name__ == "__main__":

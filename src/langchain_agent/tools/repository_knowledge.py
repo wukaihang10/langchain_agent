@@ -4,7 +4,11 @@ from langchain.tools import ToolRuntime, tool
 from pydantic import Field, StringConstraints
 
 from langchain_agent.app.context import AgentContext
-from langchain_agent.repository_knowledge import SearchResponse
+from langchain_agent.repository_knowledge import (
+    RepositoryKnowledgeError,
+    SearchResponse,
+)
+from langchain_agent.tools.repository_errors import RepositoryToolError
 
 
 def format_search_response_for_agent(response: SearchResponse) -> str:
@@ -34,12 +38,17 @@ def search_repository_knowledge(
 
     repository_knowledge = runtime.context.repository_knowledge
 
-    repository_knowledge.prepare()
+    try:
+        repository_knowledge.prepare()
 
-    response = repository_knowledge.search(
-        query,
-        top_k=top_k,
-    )
+        response = repository_knowledge.search(
+            query,
+            top_k=top_k,
+        )
+    except RepositoryKnowledgeError as error:
+        raise RepositoryToolError(
+            f"Repository knowledge search failed: {error}"
+        ) from error
 
     return format_search_response_for_agent(response)
 

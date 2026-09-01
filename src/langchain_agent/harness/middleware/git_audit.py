@@ -1,15 +1,21 @@
-from typing import NotRequired
+from typing import Literal, NotRequired
 
 from langchain.agents.middleware import AgentMiddleware, AgentState
 from langgraph.runtime import Runtime
 
 from langchain_agent.app.context import AgentContext
-from langchain_agent.integrations.git import FileEdition, collect_file_editions
+from langchain_agent.integrations.git import (
+    FileEdition,
+    GitIntegrationError,
+    collect_file_editions,
+)
 
 
 class GitAuditState(AgentState):
     edited_file_list: NotRequired[list[str]]
     edition_list: NotRequired[list[FileEdition]]
+    git_audit_status: NotRequired[Literal["available", "unavailable"]]
+    git_audit_error: NotRequired[str | None]
 
 
 class GitAuditMiddleware(
@@ -25,9 +31,19 @@ class GitAuditMiddleware(
         state: GitAuditState,
         runtime: Runtime[AgentContext],
     ):
-        audit = collect_file_editions(runtime.context.repository_path)
+        try:
+            audit = collect_file_editions(runtime.context.repository_path)
+        except GitIntegrationError as error:
+            return {
+                "edited_file_list": [],
+                "edition_list": [],
+                "git_audit_status": "unavailable",
+                "git_audit_error": str(error),
+            }
 
         return {
-            "edited_file_list": audit.get("edited_file_list", []),
-            "edition_list": audit.get("edition_list", []),
+            "edited_file_list": audit["edited_file_list"],
+            "edition_list": audit["edition_list"],
+            "git_audit_status": "available",
+            "git_audit_error": None,
         }
