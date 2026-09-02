@@ -196,7 +196,8 @@ async def run_cli(application: Application) -> None:
                 continue
 
             render_result(result)
-            render_continuation(active_inspection)
+            if active_inspection.status != ContinuationStatus.READY:
+                render_continuation(active_inspection)
             continue
 
         if user_input == "/rename":
@@ -300,7 +301,8 @@ async def run_cli(application: Application) -> None:
             continue
 
         render_result(result)
-        render_continuation(active_inspection)
+        if active_inspection.status != ContinuationStatus.READY:
+            render_continuation(active_inspection)
 
 
 async def _execute_with_live_hitl(
@@ -312,6 +314,7 @@ async def _execute_with_live_hitl(
     execution = await application.continuation.execute(runtime, request)
 
     while execution.inspection.status == ContinuationStatus.WAITING_HUMAN:
+        render_continuation(execution.inspection)
         decisions = collect_hitl_decisions(execution.inspection.interrupts)
         execution = await application.continuation.execute(
             runtime,

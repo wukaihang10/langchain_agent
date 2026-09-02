@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from langchain_core.tools import BaseTool
 
@@ -68,11 +68,43 @@ def render_continuation(inspection: ContinuationInspection) -> None:
         )
         print("Unresolved tools: " + calls)
 
+    for interrupt in inspection.interrupts:
+        value = interrupt.value
+        if not isinstance(value, Mapping):
+            continue
+
+        action_requests = value.get("action_requests", ())
+        review_configs = value.get("review_configs", ())
+        if not isinstance(action_requests, Sequence):
+            continue
+
+        for index, action in enumerate(action_requests):
+            if not isinstance(action, Mapping):
+                continue
+            print("Tool:", action.get("name", "unknown"))
+            print("Arguments:", action.get("args", {}))
+            if description := action.get("description"):
+                print("Reason:", description)
+
+            review_config = (
+                review_configs[index]
+                if isinstance(review_configs, Sequence)
+                and index < len(review_configs)
+                and isinstance(review_configs[index], Mapping)
+                else {}
+            )
+            allowed = review_config.get("allowed_decisions", ())
+            if isinstance(allowed, Sequence):
+                print("Allowed decisions: " + ", ".join(map(str, allowed)))
+
     if inspection.allowed_actions:
-        actions = ", ".join(
-            action.value for action in sorted(inspection.allowed_actions)
-        )
-        print("Allowed actions: " + actions)
+        if any(
+            action.value in {"CONTINUE", "ANSWER_INTERRUPT"}
+            for action in inspection.allowed_actions
+        ):
+            print("Next: enter /continue.")
+        else:
+            print("Next: enter a message to start a turn.")
 
 
 def render_help() -> None:

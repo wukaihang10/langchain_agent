@@ -59,6 +59,40 @@ class ContinuationRenderingTests(unittest.TestCase):
         self.assertEqual(rendered.count("Status:"), 1)
         self.assertIn("Status: OUTCOME_UNKNOWN", rendered)
 
+    def test_waiting_human_renders_original_request_and_cli_command(self):
+        output = io.StringIO()
+        interrupt = PendingInterrupt(
+            id="interrupt-1",
+            value={
+                "action_requests": [
+                    {
+                        "name": "write_file",
+                        "args": {"path": "notes.txt", "content": "hello"},
+                        "description": "Tool execution requires permission",
+                    }
+                ],
+                "review_configs": [
+                    {"allowed_decisions": ["approve", "reject"]}
+                ],
+            },
+        )
+
+        with patch("sys.stdout", output):
+            render_continuation(
+                inspection(
+                    ContinuationStatus.WAITING_HUMAN,
+                    checkpoint_id="checkpoint-1",
+                    interrupts=[interrupt],
+                )
+            )
+
+        rendered = output.getvalue()
+        self.assertIn("Tool: write_file", rendered)
+        self.assertIn("notes.txt", rendered)
+        self.assertIn("Allowed decisions: approve, reject", rendered)
+        self.assertIn("/continue", rendered)
+        self.assertNotIn("ANSWER_INTERRUPT", rendered)
+
 
 class LiveHitlRoutingTests(unittest.IsolatedAsyncioTestCase):
     @patch(
@@ -95,11 +129,12 @@ class LiveHitlRoutingTests(unittest.IsolatedAsyncioTestCase):
         runtime = object()
         start_request = SimpleNamespace(action=ContinuationAction.START_TURN)
 
-        value, final_inspection = await _execute_with_live_hitl(
-            application=application,
-            runtime=runtime,
-            request=start_request,
-        )
+        with patch("langchain_agent.cli.app.render_continuation") as render:
+            value, final_inspection = await _execute_with_live_hitl(
+                application=application,
+                runtime=runtime,
+                request=start_request,
+            )
 
         self.assertEqual(value["messages"][-1].content, "done")
         self.assertEqual(final_inspection.status, ContinuationStatus.READY)
@@ -108,6 +143,7 @@ class LiveHitlRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answer.action, ContinuationAction.ANSWER_INTERRUPT)
         self.assertEqual(answer.observed_checkpoint_id, "checkpoint-2")
         self.assertEqual(answer.decisions, ({"type": "approve"},))
+        render.assert_called_once_with(waiting)
         collect_hitl_decisions.assert_called_once_with((interrupt,))
 
 

@@ -12,8 +12,8 @@ def collect_hitl_decisions(interrupts) -> list[dict]:
             strict=True,
         ):
             print("\n--- Tool approval required ---")
-            print("Tool:", action["name"])
-            print("Arguments:", action["args"])
+            # print("Tool:", action["name"])
+            # print("Arguments:", action["args"])
 
             description = action.get("description")
 
