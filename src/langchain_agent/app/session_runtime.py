@@ -51,8 +51,6 @@ def build_session_runtime(
         },
     }
 
-    session_store.touch(session.thread_id)
-
     return SessionRuntime(
         session=session,
         context=context,

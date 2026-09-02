@@ -108,6 +108,10 @@ class SessionRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 "read_only",
             )
             self.assertEqual(provider.repository_path, repository.resolve())
+            self.assertEqual(
+                store.get(session.thread_id).updated_at,
+                session.updated_at,
+            )
 
     async def test_delete_removes_checkpoint_before_session_metadata(self):
         with tempfile.TemporaryDirectory() as directory:

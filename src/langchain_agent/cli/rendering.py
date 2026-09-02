@@ -3,6 +3,7 @@ from collections.abc import Sequence
 from langchain_core.tools import BaseTool
 
 from langchain_agent.app.context import AgentContext
+from langchain_agent.app.session_continuation import ContinuationInspection
 from langchain_agent.persistence.sessions import Session
 
 
@@ -53,12 +54,34 @@ def render_active_session(
     print("Permission mode: " f"{context.permission_mode.value}")
 
 
+def render_continuation(inspection: ContinuationInspection) -> None:
+    print("\n--- Continuation status ---")
+    print(f"Status: {inspection.status.value}")
+    print(inspection.reason)
+
+    if inspection.pending_nodes:
+        print("Pending nodes: " + ", ".join(inspection.pending_nodes))
+
+    if inspection.unresolved_tool_calls:
+        calls = ", ".join(
+            f"{call.name} ({call.id})" for call in inspection.unresolved_tool_calls
+        )
+        print("Unresolved tools: " + calls)
+
+    if inspection.allowed_actions:
+        actions = ", ".join(
+            action.value for action in sorted(inspection.allowed_actions)
+        )
+        print("Allowed actions: " + actions)
+
+
 def render_help() -> None:
     print(
         "\nAvailable commands:\n"
         "  /list    List sessions\n"
         "  /new     Create a new session\n"
         "  /resume  Resume an existing session\n"
+        "  /continue Continue pending work or answer an interrupt\n"
         "  /rename  Rename the active session\n"
         "  /delete  Delete a session\n"
         "  /help    Show commands\n"

@@ -11,6 +11,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langchain_agent.app.agent import NATIVE_TOOLS, build_agent
 from langchain_agent.app.config import AppConfig
 from langchain_agent.app.repository_knowledge import RepositoryKnowledgeProvider
+from langchain_agent.app.session_continuation import SessionContinuation
 from langchain_agent.harness.permissions.registry import build_tool_policy_registry
 from langchain_agent.integrations.mcp.client import (
     MCPIntegration,
@@ -39,6 +40,7 @@ class Application:
     repository_knowledge: RepositoryKnowledgeProvider
     mcp: MCPIntegration
     config: AppConfig
+    continuation: SessionContinuation
 
 
 @asynccontextmanager
@@ -84,6 +86,11 @@ async def bootstrap_application(
             checkpointer=checkpointer,
             config=config,
         )
+        continuation = SessionContinuation(
+            agent=agent,
+            policy_registry=policy_registry,
+            session_store=session_store,
+        )
 
         yield Application(
             agent=agent,
@@ -92,4 +99,5 @@ async def bootstrap_application(
             repository_knowledge=repository_knowledge,
             mcp=mcp,
             config=config,
+            continuation=continuation,
         )

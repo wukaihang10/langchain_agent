@@ -1,6 +1,3 @@
-from langgraph.types import Command
-
-
 def collect_hitl_decisions(interrupts) -> list[dict]:
     decisions: list[dict] = []
 
@@ -46,25 +43,3 @@ def collect_hitl_decisions(interrupts) -> list[dict]:
                 print("Invalid decision. " f"Allowed: {allowed}")
 
     return decisions
-
-
-async def invoke_with_hitl(*, agent, input_value, config, context):
-    current_input = input_value
-
-    while True:
-        result = await agent.ainvoke(
-            current_input,
-            config=config,
-            context=context,
-            version="v2",
-        )
-
-        if not result.interrupts:
-            return result.value
-
-        decisions = collect_hitl_decisions(result.interrupts)
-        current_input = Command(
-            resume={
-                "decisions": decisions,
-            }
-        )

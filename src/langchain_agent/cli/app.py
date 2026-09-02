@@ -9,6 +9,13 @@ from prompt_toolkit.key_binding import KeyBindings
 
 from langchain_agent.app.bootstrap import Application, bootstrap_application
 from langchain_agent.app.config import AppConfig
+from langchain_agent.app.session_continuation import (
+    ContinuationAction,
+    ContinuationError,
+    ContinuationInspection,
+    ContinuationRequest,
+    ContinuationStatus,
+)
 from langchain_agent.app.session_runtime import (
     SessionRuntime,
     build_session_runtime,
@@ -19,9 +26,10 @@ from langchain_agent.cli.commands import (
     resolve_repository_path,
     select_session,
 )
-from langchain_agent.cli.hitl import invoke_with_hitl
+from langchain_agent.cli.hitl import collect_hitl_decisions
 from langchain_agent.cli.rendering import (
     render_active_session,
+    render_continuation,
     render_help,
     render_mcp_tools,
     render_result,
@@ -73,6 +81,7 @@ def _build_session_runtime(
 async def run_cli(application: Application) -> None:
     prompt_session = PromptSession(key_bindings=KEY_BINDINGS)
     active_runtime: SessionRuntime | None = None
+    active_inspection: ContinuationInspection | None = None
 
     render_mcp_tools(application.mcp.tools)
     print("\nLangGraph Agent" "\nType /help for commands.")
@@ -117,6 +126,8 @@ async def run_cli(application: Application) -> None:
                 active_runtime.session,
                 active_runtime.context,
             )
+            active_inspection = await application.continuation.inspect(active_runtime)
+            render_continuation(active_inspection)
             continue
 
         if user_input == "/resume":
@@ -136,7 +147,10 @@ async def run_cli(application: Application) -> None:
                 active_runtime is not None
                 and session.thread_id == active_runtime.session.thread_id
             ):
-                print("That session is already active.")
+                active_inspection = await application.continuation.inspect(
+                    active_runtime
+                )
+                render_continuation(active_inspection)
                 continue
 
             active_runtime = _build_session_runtime(application, session)
@@ -144,6 +158,45 @@ async def run_cli(application: Application) -> None:
                 active_runtime.session,
                 active_runtime.context,
             )
+            active_inspection = await application.continuation.inspect(active_runtime)
+            render_continuation(active_inspection)
+            continue
+
+        if user_input == "/continue":
+            if active_runtime is None or active_inspection is None:
+                print("No active session. Use /new or /resume first.")
+                continue
+
+            if active_inspection.status == ContinuationStatus.WAITING_HUMAN:
+                decisions = tuple(collect_hitl_decisions(active_inspection.interrupts))
+                action = ContinuationAction.ANSWER_INTERRUPT
+            elif active_inspection.status == ContinuationStatus.RESUMABLE:
+                decisions = ()
+                action = ContinuationAction.CONTINUE
+            else:
+                render_continuation(active_inspection)
+                continue
+
+            try:
+                result, active_inspection = await _execute_with_live_hitl(
+                    application=application,
+                    runtime=active_runtime,
+                    request=ContinuationRequest(
+                        action=action,
+                        observed_checkpoint_id=active_inspection.checkpoint_id,
+                        decisions=decisions,
+                    ),
+                )
+            except ContinuationError as exc:
+                print(f"Continuation rejected: {exc}")
+                active_inspection = await application.continuation.inspect(
+                    active_runtime
+                )
+                render_continuation(active_inspection)
+                continue
+
+            render_result(result)
+            render_continuation(active_inspection)
             continue
 
         if user_input == "/rename":
@@ -214,6 +267,7 @@ async def run_cli(application: Application) -> None:
 
             if deleting_active:
                 active_runtime = None
+                active_inspection = None
                 print("No active session. " "Use /new or /resume.")
 
             continue
@@ -226,20 +280,49 @@ async def run_cli(application: Application) -> None:
             print("No active session. " "Use /new or /resume first.")
             continue
 
-        result = await invoke_with_hitl(
-            agent=application.agent,
-            input_value={
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": user_input,
-                    }
-                ]
-            },
-            config=active_runtime.invoke_config,
-            context=active_runtime.context,
-        )
+        if active_inspection is None:
+            active_inspection = await application.continuation.inspect(active_runtime)
+
+        try:
+            result, active_inspection = await _execute_with_live_hitl(
+                application=application,
+                runtime=active_runtime,
+                request=ContinuationRequest(
+                    action=ContinuationAction.START_TURN,
+                    observed_checkpoint_id=active_inspection.checkpoint_id,
+                    message=user_input,
+                ),
+            )
+        except ContinuationError as exc:
+            print(f"Message rejected: {exc}")
+            active_inspection = await application.continuation.inspect(active_runtime)
+            render_continuation(active_inspection)
+            continue
+
         render_result(result)
+        render_continuation(active_inspection)
+
+
+async def _execute_with_live_hitl(
+    *,
+    application: Application,
+    runtime: SessionRuntime,
+    request: ContinuationRequest,
+) -> tuple[dict, ContinuationInspection]:
+    execution = await application.continuation.execute(runtime, request)
+
+    while execution.inspection.status == ContinuationStatus.WAITING_HUMAN:
+        decisions = collect_hitl_decisions(execution.inspection.interrupts)
+        execution = await application.continuation.execute(
+            runtime,
+            ContinuationRequest(
+                action=ContinuationAction.ANSWER_INTERRUPT,
+                observed_checkpoint_id=execution.inspection.checkpoint_id,
+                decisions=tuple(decisions),
+            ),
+        )
+
+    return execution.value, execution.inspection
 
 
 async def main(argv: list[str] | None = None) -> None:

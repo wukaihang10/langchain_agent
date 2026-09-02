@@ -2,6 +2,7 @@
 .env
 .rag_index/
 .agent/
+docs/research/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
