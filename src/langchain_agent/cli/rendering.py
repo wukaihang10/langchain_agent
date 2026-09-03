@@ -127,6 +127,11 @@ def render_continuation(inspection: ContinuationInspection) -> None:
             print("Next: enter /continue.")
         else:
             print("Next: enter a message to start a turn.")
+        if any(
+            action.value == "TERMINATE_TURN"
+            for action in inspection.allowed_actions
+        ):
+            print("Or enter /terminate to stop the unfinished turn.")
 
 
 def render_help() -> None:
@@ -136,6 +141,7 @@ def render_help() -> None:
         "  /new     Create a new session\n"
         "  /resume  Resume an existing session\n"
         "  /continue Continue pending work or answer an interrupt\n"
+        "  /terminate Terminate the unfinished turn without continuing it\n"
         "  /rename  Rename the active session\n"
         "  /delete  Delete a session\n"
         "  /help    Show commands\n"

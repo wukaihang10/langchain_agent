@@ -18,7 +18,7 @@ from langchain_agent.harness.middleware.mcp_retry import (
 from langchain_agent.harness.middleware.tool_errors import (
     build_repository_tool_error_middleware,
 )
-from langchain_agent.harness.middleware.tool_recovery import ToolRecoveryMiddleware
+from langchain_agent.harness.middleware.turn_recovery import TurnRecoveryMiddleware
 from langchain_agent.harness.permissions.middleware import (
     PermissionEnforcementMiddleware,
     build_hitl_middleware,
@@ -96,7 +96,7 @@ def build_agent(
     middleware = [
         # Recovery must be outermost: synthetic results bypass every ordinary
         # policy wrapper, while explicit retries traverse the normal stack.
-        ToolRecoveryMiddleware(),
+        TurnRecoveryMiddleware(),
         hitl_middleware,
         TodoListMiddleware(),
         subagent_middleware,

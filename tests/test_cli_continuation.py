@@ -22,10 +22,17 @@ def inspection(status, *, checkpoint_id, interrupts=(), unresolved=()):
     allowed = {
         ContinuationStatus.EMPTY: {ContinuationAction.START_TURN},
         ContinuationStatus.READY: {ContinuationAction.START_TURN},
-        ContinuationStatus.WAITING_HUMAN: {ContinuationAction.ANSWER_INTERRUPT},
-        ContinuationStatus.RESUMABLE: {ContinuationAction.CONTINUE},
+        ContinuationStatus.WAITING_HUMAN: {
+            ContinuationAction.ANSWER_INTERRUPT,
+            ContinuationAction.TERMINATE_TURN,
+        },
+        ContinuationStatus.RESUMABLE: {
+            ContinuationAction.CONTINUE,
+            ContinuationAction.TERMINATE_TURN,
+        },
         ContinuationStatus.OUTCOME_UNKNOWN: {
-            ContinuationAction.RESOLVE_AND_CONTINUE
+            ContinuationAction.RESOLVE_AND_CONTINUE,
+            ContinuationAction.TERMINATE_TURN,
         },
         ContinuationStatus.NEEDS_REPAIR: set(),
     }
@@ -75,6 +82,7 @@ class ContinuationRenderingTests(unittest.TestCase):
         self.assertIn("Automatic retry Tools: search (safe)", rendered)
         self.assertIn("Requires resolution Tools: create (unsafe)", rendered)
         self.assertIn("/continue", rendered)
+        self.assertIn("/terminate", rendered)
 
     def test_waiting_human_renders_interrupt_description_and_cli_command(self):
         output = io.StringIO()
@@ -225,6 +233,66 @@ class LiveHitlRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.observed_checkpoint_id, "checkpoint-1")
         self.assertEqual(request.resolutions, (resolution,))
         collect.assert_called_once_with((uncertain_call,))
+
+    async def test_terminate_command_submits_only_the_checkpoint_guard(self):
+        uncertain_call = UnresolvedToolCall(
+            "unsafe-id", "create", {"name": "x"}, False, True, True
+        )
+        uncertain = inspection(
+            ContinuationStatus.OUTCOME_UNKNOWN,
+            checkpoint_id="checkpoint-1",
+            unresolved=(uncertain_call,),
+        )
+        ready = inspection(ContinuationStatus.READY, checkpoint_id="checkpoint-2")
+        continuation = SimpleNamespace(
+            inspect=AsyncMock(return_value=uncertain),
+            execute=AsyncMock(
+                return_value=ContinuationResult(
+                    value={"messages": [SimpleNamespace(content="terminated")]},
+                    inspection=ready,
+                )
+            ),
+        )
+        application = SimpleNamespace(
+            continuation=continuation,
+            mcp=SimpleNamespace(tools=[]),
+            session_store=object(),
+        )
+        session = SimpleNamespace(thread_id="thread-1", name="test")
+        runtime = SimpleNamespace(session=session, context=object())
+        prompt_session = SimpleNamespace(
+            prompt_async=AsyncMock(side_effect=["/new", "/terminate", "/exit"])
+        )
+
+        with (
+            patch("langchain_agent.cli.app.PromptSession", return_value=prompt_session),
+            patch(
+                "langchain_agent.cli.app.create_session_interactively",
+                return_value=session,
+            ),
+            patch(
+                "langchain_agent.cli.app._build_session_runtime",
+                return_value=runtime,
+            ),
+            patch("langchain_agent.cli.app.collect_hitl_decisions") as collect_hitl,
+            patch(
+                "langchain_agent.cli.app.collect_tool_call_resolutions"
+            ) as collect_recovery,
+            patch("langchain_agent.cli.app.render_active_session"),
+            patch("langchain_agent.cli.app.render_continuation"),
+            patch("langchain_agent.cli.app.render_result"),
+            patch("langchain_agent.cli.app.render_mcp_tools"),
+        ):
+            await run_cli(application)
+
+        request = continuation.execute.await_args.args[1]
+        self.assertEqual(request.action, ContinuationAction.TERMINATE_TURN)
+        self.assertEqual(request.observed_checkpoint_id, "checkpoint-1")
+        self.assertIsNone(request.message)
+        self.assertFalse(request.decisions)
+        self.assertFalse(request.resolutions)
+        collect_hitl.assert_not_called()
+        collect_recovery.assert_not_called()
 
 
 class ToolRecoveryPromptTests(unittest.TestCase):

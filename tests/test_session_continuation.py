@@ -21,6 +21,7 @@ from langchain_agent.harness.permissions.models import (
     ToolRisk,
 )
 from langchain_agent.harness.permissions.registry import ToolPolicyRegistry
+from langchain_agent.harness.middleware.turn_recovery import TurnRecoveryMode
 
 SAFE_POLICY = ToolPolicy(
     category=ToolCategory.READ,
@@ -136,6 +137,59 @@ def service(state, *, policies=None, state_after_invoke=None):
 
 
 class SessionContinuationInspectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unfinished_sessions_offer_explicit_turn_termination(self):
+        cases = (
+            (
+                snapshot(
+                    messages=[ai_call(("call-1", "write", {}))],
+                    next_nodes=["model"],
+                    interrupts=[
+                        Interrupt(
+                            value={
+                                "action_requests": [
+                                    {"name": "write", "args": {}}
+                                ],
+                                "review_configs": [
+                                    {"allowed_decisions": ["approve", "reject"]}
+                                ],
+                            },
+                            id="interrupt-1",
+                        )
+                    ],
+                ),
+                {"write": UNSAFE_POLICY},
+                {
+                    ContinuationAction.ANSWER_INTERRUPT,
+                    ContinuationAction.TERMINATE_TURN,
+                },
+            ),
+            (
+                snapshot(next_nodes=["model"]),
+                None,
+                {
+                    ContinuationAction.CONTINUE,
+                    ContinuationAction.TERMINATE_TURN,
+                },
+            ),
+            (
+                snapshot(
+                    messages=[ai_call(("call-1", "write", {}))],
+                    next_nodes=["tools"],
+                ),
+                {"write": UNSAFE_POLICY},
+                {
+                    ContinuationAction.RESOLVE_AND_CONTINUE,
+                    ContinuationAction.TERMINATE_TURN,
+                },
+            ),
+        )
+
+        for state, policies, expected in cases:
+            with self.subTest(expected=expected):
+                continuation, _, _ = service(state, policies=policies)
+                inspection = await continuation.inspect(runtime())
+                self.assertEqual(inspection.allowed_actions, expected)
+
     async def test_empty_and_ready_sessions_allow_only_start_turn(self):
         continuation, _, _ = service(snapshot(checkpoint_id=None))
         empty = await continuation.inspect(runtime())
@@ -176,7 +230,10 @@ class SessionContinuationInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inspection.status, ContinuationStatus.WAITING_HUMAN)
         self.assertEqual(
             inspection.allowed_actions,
-            {ContinuationAction.ANSWER_INTERRUPT},
+            {
+                ContinuationAction.ANSWER_INTERRUPT,
+                ContinuationAction.TERMINATE_TURN,
+            },
         )
         self.assertEqual(inspection.interrupts[0].value["action_requests"], [action])
 
@@ -211,7 +268,10 @@ class SessionContinuationInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(safe_tool.status, ContinuationStatus.RESUMABLE)
         self.assertEqual(
             safe_tool.allowed_actions,
-            {ContinuationAction.CONTINUE},
+            {
+                ContinuationAction.CONTINUE,
+                ContinuationAction.TERMINATE_TURN,
+            },
         )
 
     async def test_unsafe_non_idempotent_and_unclassified_tools_fail_closed(self):
@@ -239,7 +299,10 @@ class SessionContinuationInspectionTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(
                     inspection.allowed_actions,
-                    {ContinuationAction.RESOLVE_AND_CONTINUE},
+                    {
+                        ContinuationAction.RESOLVE_AND_CONTINUE,
+                        ContinuationAction.TERMINATE_TURN,
+                    },
                 )
 
     async def test_independent_unsafe_call_overrides_hitl_interrupt(self):
@@ -320,7 +383,10 @@ class SessionContinuationInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inspection.status, ContinuationStatus.OUTCOME_UNKNOWN)
         self.assertEqual(
             inspection.allowed_actions,
-            {ContinuationAction.RESOLVE_AND_CONTINUE},
+            {
+                ContinuationAction.RESOLVE_AND_CONTINUE,
+                ContinuationAction.TERMINATE_TURN,
+            },
         )
         self.assertEqual(
             [call.id for call in inspection.unresolved_tool_calls],
@@ -407,6 +473,265 @@ class SessionContinuationInspectionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SessionContinuationExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_waiting_termination_rejects_all_and_cancels_unprotected(
+        self,
+    ):
+        calls = ai_call(
+            ("write-1", "write", {"value": 1}),
+            ("write-2", "write", {"value": 2}),
+            ("safe-1", "search", {"q": "agent"}),
+        )
+        waiting = snapshot(
+            messages=[calls],
+            next_nodes=["tools"],
+            interrupts=[
+                Interrupt(
+                    value={
+                        "action_requests": [
+                            {"name": "write", "args": {"value": 1}},
+                            {"name": "write", "args": {"value": 2}},
+                        ],
+                        "review_configs": [
+                            {"allowed_decisions": ["approve", "reject"]},
+                            {"allowed_decisions": ["approve", "reject"]},
+                        ],
+                    },
+                    id="interrupt-1",
+                )
+            ],
+        )
+        continuation, agent, _ = service(
+            waiting,
+            policies={"write": UNSAFE_POLICY, "search": SAFE_POLICY},
+            state_after_invoke=snapshot(checkpoint_id="checkpoint-2"),
+        )
+
+        await continuation.execute(
+            runtime(),
+            ContinuationRequest(
+                action=ContinuationAction.TERMINATE_TURN,
+                observed_checkpoint_id="checkpoint-1",
+            ),
+        )
+
+        input_value, _, invocation_context = agent.invocations[0]
+        self.assertIsInstance(input_value, Command)
+        self.assertEqual(
+            input_value.resume,
+            {
+                "decisions": [
+                    {"type": "reject", "message": "User terminated the turn."},
+                    {"type": "reject", "message": "User terminated the turn."},
+                ]
+            },
+        )
+        self.assertEqual(
+            set(invocation_context.turn_recovery.directives),
+            {"safe-1"},
+        )
+        self.assertEqual(
+            invocation_context.turn_recovery.directives[
+                "safe-1"
+            ].resolution_kind,
+            "CANCELLED_BY_TERMINATION",
+        )
+
+    async def test_outcome_unknown_termination_records_each_unprotected_risk(self):
+        pending = snapshot(
+            messages=[
+                ai_call(
+                    ("safe-id", "search", {"q": "agent"}),
+                    ("unsafe-id", "write", {"value": 1}),
+                    ("unknown-id", "unregistered", {}),
+                )
+            ],
+            next_nodes=["tools"],
+        )
+        continuation, agent, _ = service(
+            pending,
+            policies={"search": SAFE_POLICY, "write": UNSAFE_POLICY},
+            state_after_invoke=snapshot(checkpoint_id="checkpoint-2"),
+        )
+
+        await continuation.execute(
+            runtime(),
+            ContinuationRequest(
+                action=ContinuationAction.TERMINATE_TURN,
+                observed_checkpoint_id="checkpoint-1",
+            ),
+        )
+
+        directives = agent.invocations[0][2].turn_recovery.directives
+        self.assertEqual(
+            {
+                call_id: directive.resolution_kind
+                for call_id, directive in directives.items()
+            },
+            {
+                "safe-id": "CANCELLED_BY_TERMINATION",
+                "unsafe-id": "OUTCOME_UNKNOWN_AT_TERMINATION",
+                "unknown-id": "OUTCOME_UNKNOWN_AT_TERMINATION",
+            },
+        )
+
+    async def test_outcome_unknown_termination_also_rejects_embedded_hitl(self):
+        pending = snapshot(
+            messages=[
+                ai_call(
+                    ("protected-id", "write", {"value": 1}),
+                    ("independent-id", "create", {"value": 2}),
+                )
+            ],
+            next_nodes=["tools"],
+            interrupts=[
+                Interrupt(
+                    value={
+                        "action_requests": [
+                            {"name": "write", "args": {"value": 1}}
+                        ],
+                        "review_configs": [
+                            {"allowed_decisions": ["approve", "reject"]}
+                        ],
+                    },
+                    id="interrupt-1",
+                )
+            ],
+        )
+        continuation, agent, _ = service(
+            pending,
+            policies={"write": UNSAFE_POLICY, "create": UNSAFE_POLICY},
+            state_after_invoke=snapshot(checkpoint_id="checkpoint-2"),
+        )
+        inspection = await continuation.inspect(runtime())
+        self.assertEqual(inspection.status, ContinuationStatus.OUTCOME_UNKNOWN)
+
+        await continuation.execute(
+            runtime(),
+            ContinuationRequest(
+                action=ContinuationAction.TERMINATE_TURN,
+                observed_checkpoint_id=inspection.checkpoint_id,
+            ),
+        )
+
+        input_value, _, invocation_context = agent.invocations[0]
+        self.assertIsInstance(input_value, Command)
+        self.assertEqual(
+            input_value.resume,
+            {
+                "decisions": [
+                    {"type": "reject", "message": "User terminated the turn."}
+                ]
+            },
+        )
+        self.assertEqual(
+            set(invocation_context.turn_recovery.directives),
+            {"independent-id"},
+        )
+
+    async def test_termination_payload_and_stale_checkpoint_are_rejected_without_work(
+        self,
+    ):
+        pending = snapshot(next_nodes=["model"])
+        invalid_payloads = (
+            {"message": "new work"},
+            {"decisions": ({"type": "reject"},)},
+            {
+                "resolutions": (
+                    ToolCallResolution(
+                        "call-1",
+                        ToolCallResolutionKind.RECORD_OUTCOME_UNKNOWN,
+                    ),
+                )
+            },
+        )
+
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                continuation, agent, store = service(pending)
+                with self.assertRaisesRegex(
+                    InvalidContinuationAction,
+                    "does not accept",
+                ):
+                    await continuation.execute(
+                        runtime(),
+                        ContinuationRequest(
+                            action=ContinuationAction.TERMINATE_TURN,
+                            observed_checkpoint_id="checkpoint-1",
+                            **payload,
+                        ),
+                    )
+                self.assertFalse(store.touched)
+                self.assertFalse(agent.invocations)
+
+        continuation, agent, store = service(
+            snapshot(checkpoint_id="checkpoint-2", next_nodes=["model"])
+        )
+        with self.assertRaises(StaleContinuationError):
+            await continuation.execute(
+                runtime(),
+                ContinuationRequest(
+                    action=ContinuationAction.TERMINATE_TURN,
+                    observed_checkpoint_id="checkpoint-1",
+                ),
+            )
+        self.assertFalse(store.touched)
+        self.assertFalse(agent.invocations)
+
+    async def test_resumable_termination_builds_cancellation_plan_without_new_input(
+        self,
+    ):
+        pending = snapshot(
+            messages=[ai_call(("safe-id", "search", {"q": "agent"}))],
+            next_nodes=["tools"],
+        )
+        continuation, agent, store = service(
+            pending,
+            policies={"search": SAFE_POLICY},
+            state_after_invoke=snapshot(checkpoint_id="checkpoint-2"),
+        )
+
+        result = await continuation.execute(
+            runtime(),
+            ContinuationRequest(
+                action=ContinuationAction.TERMINATE_TURN,
+                observed_checkpoint_id="checkpoint-1",
+            ),
+        )
+
+        input_value, _, invocation_context = agent.invocations[0]
+        self.assertIsNone(input_value)
+        self.assertEqual(
+            invocation_context.turn_recovery.mode,
+            TurnRecoveryMode.TERMINATE,
+        )
+        directive = invocation_context.turn_recovery.directives["safe-id"]
+        self.assertEqual(directive.resolution_kind, "CANCELLED_BY_TERMINATION")
+        self.assertEqual(store.touched, ["thread-1"])
+        self.assertEqual(result.inspection.status, ContinuationStatus.READY)
+
+    async def test_termination_reports_pending_state_instead_of_claiming_success(self):
+        continuation, _, _ = service(
+            snapshot(next_nodes=["model"]),
+            state_after_invoke=snapshot(
+                checkpoint_id="checkpoint-2",
+                next_nodes=["model"],
+            ),
+        )
+
+        result = await continuation.execute(
+            runtime(),
+            ContinuationRequest(
+                action=ContinuationAction.TERMINATE_TURN,
+                observed_checkpoint_id="checkpoint-1",
+            ),
+        )
+
+        self.assertEqual(result.inspection.status, ContinuationStatus.RESUMABLE)
+        self.assertIn(
+            ContinuationAction.TERMINATE_TURN,
+            result.inspection.allowed_actions,
+        )
+
     async def test_confirmed_success_is_translated_to_recovery_plan(self):
         pending = snapshot(
             messages=[ai_call(("write-id", "write", {"value": 1}))],
@@ -434,7 +759,11 @@ class SessionContinuationExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         invocation_context = agent.invocations[0][2]
-        directive = invocation_context.tool_recovery.directives["write-id"]
+        self.assertEqual(
+            invocation_context.turn_recovery.mode,
+            TurnRecoveryMode.CONTINUE,
+        )
+        directive = invocation_context.turn_recovery.directives["write-id"]
         self.assertEqual(directive.resolution_kind, "CONFIRM_SUCCEEDED")
         self.assertEqual(directive.result_summary, "created resource 42")
         self.assertEqual(store.touched, ["thread-1"])

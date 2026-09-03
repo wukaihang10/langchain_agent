@@ -163,6 +163,40 @@ async def run_cli(application: Application) -> None:
             render_continuation(active_inspection)
             continue
 
+        if user_input == "/terminate":
+            if active_runtime is None or active_inspection is None:
+                print("No active session. Use /new or /resume first.")
+                continue
+
+            if (
+                ContinuationAction.TERMINATE_TURN
+                not in active_inspection.allowed_actions
+            ):
+                render_continuation(active_inspection)
+                continue
+
+            try:
+                execution = await application.continuation.execute(
+                    active_runtime,
+                    ContinuationRequest(
+                        action=ContinuationAction.TERMINATE_TURN,
+                        observed_checkpoint_id=active_inspection.checkpoint_id,
+                    ),
+                )
+            except ContinuationError as exc:
+                print(f"Turn termination rejected: {exc}")
+                active_inspection = await application.continuation.inspect(
+                    active_runtime
+                )
+                render_continuation(active_inspection)
+                continue
+
+            active_inspection = execution.inspection
+            render_result(execution.value)
+            if active_inspection.status != ContinuationStatus.READY:
+                render_continuation(active_inspection)
+            continue
+
         if user_input == "/continue":
             if active_runtime is None or active_inspection is None:
                 print("No active session. Use /new or /resume first.")
