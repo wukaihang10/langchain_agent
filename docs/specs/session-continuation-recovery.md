@@ -3,6 +3,10 @@
 Status: ready for implementation. Canonical tracker record:
 https://github.com/wukaihang10/langchain_agent/issues/1
 
+> Follow-up: issue #2 extends the `OUTCOME_UNKNOWN` baseline described here
+> with explicit `RESOLVE_AND_CONTINUE` recovery. Statements below that say
+> `OUTCOME_UNKNOWN` has no action describe issue #1's original scope.
+
 ## Problem Statement
 
 The application persists LangGraph checkpoints and lets a user select a saved
@@ -46,7 +50,7 @@ The supported statuses are:
 | `WAITING_HUMAN` | A persisted human-in-the-loop interrupt awaits a decision | Answer the interrupt |
 | `RESUMABLE` | The previous graph execution has pending work and every pending operation is safe to replay | Continue the existing graph execution |
 | `OUTCOME_UNKNOWN` | A pending tool may have produced an external effect whose result is not durable or verifiable | No automatic graph action in this version |
-| `NEEDS_REPAIR` | The persisted history cannot be continued normally and has no unresolved external outcome that takes precedence | No automatic graph action in this version |
+| `NEEDS_REPAIR` | The persisted history is structurally invalid or has no legal continuation path | No automatic graph action in this version |
 
 The executable continuation actions in this version are:
 
@@ -137,10 +141,13 @@ chooses another session.
   automatic continuation is safe only when every pending tool has known policy,
   is idempotent, and has no side effect.
 - A missing tool policy fails closed and contributes to `OUTCOME_UNKNOWN`.
-- If any pending operation has an unknown external outcome, that safety fact
-  takes precedence over protocol-only repair concerns. `NEEDS_REPAIR` is used
-  when state is structurally non-continuable without an unresolved external
-  outcome.
+- Protocol and checkpoint structure are prerequisites for every executable
+  continuation action. A structurally invalid state is `NEEDS_REPAIR`, even
+  when an unresolved tool call may also have an unknown external outcome; that
+  uncertainty remains visible in the inspection diagnostics.
+- `NEEDS_REPAIR` is also used when an unresolved tool call has no pending tool
+  execution path, including malformed history whose only pending node is the
+  model.
 - `EMPTY` means no checkpoint exists. It allows only `START_TURN`.
 - `READY` requires an empty next-node tuple, no pending interrupts, no unresolved
   tool calls, and protocol-valid message history. It allows only `START_TURN`.
@@ -206,14 +213,19 @@ chooses another session.
   `CONTINUE`.
 - Pending tools that are all known, idempotent, and side-effect free return
   `RESUMABLE`; continuing invokes the graph with `None`.
-- A pending tool that is side-effecting, non-idempotent, or unclassified returns
-  `OUTCOME_UNKNOWN` and does not invoke the graph.
+- A structurally valid pending tool that is side-effecting, non-idempotent, or
+  unclassified returns `OUTCOME_UNKNOWN` and does not invoke the graph.
 - A mixed pending tool batch containing both safe and unsafe tools returns
   `OUTCOME_UNKNOWN`.
 - A tool call gated by the currently persisted HITL interrupt returns
   `WAITING_HUMAN`, not `OUTCOME_UNKNOWN`.
 - An unanswered tool call with no pending tool task, no interrupt, and no normal
   continuation path returns `NEEDS_REPAIR`.
+- An unanswered tool call followed by a non-tool message whose only pending node
+  is the model returns `NEEDS_REPAIR`; it is not offered tool-call recovery.
+- A structurally invalid history with a pending unsafe tool returns
+  `NEEDS_REPAIR`, exposes the possible unknown external outcome in diagnostics,
+  and permits no continuation action.
 - Tool calls and results are paired by ID in tests that vary ordering, include
   several calls in one AI message, and preserve only part of a parallel batch.
 - A normal new human message is rejected in every status except `EMPTY` and

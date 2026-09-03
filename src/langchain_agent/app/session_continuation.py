@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
@@ -9,6 +9,11 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
 
 from langchain_agent.app.session_runtime import SessionRuntime
+from langchain_agent.harness.middleware.tool_recovery import (
+    RecoveryDirectiveKind,
+    ToolRecoveryDirective,
+    ToolRecoveryPlan,
+)
 from langchain_agent.harness.permissions.registry import ToolPolicyRegistry
 from langchain_agent.persistence.sessions import SessionStore
 
@@ -26,6 +31,22 @@ class ContinuationAction(StrEnum):
     START_TURN = "START_TURN"
     ANSWER_INTERRUPT = "ANSWER_INTERRUPT"
     CONTINUE = "CONTINUE"
+    RESOLVE_AND_CONTINUE = "RESOLVE_AND_CONTINUE"
+
+
+class ToolCallResolutionKind(StrEnum):
+    CONFIRM_SUCCEEDED = "CONFIRM_SUCCEEDED"
+    CONFIRM_NOT_APPLIED = "CONFIRM_NOT_APPLIED"
+    RETRY_DESPITE_RISK = "RETRY_DESPITE_RISK"
+    RECORD_OUTCOME_UNKNOWN = "RECORD_OUTCOME_UNKNOWN"
+
+
+@dataclass(frozen=True)
+class ToolCallResolution:
+    tool_call_id: str
+    kind: ToolCallResolutionKind
+    result_summary: str | None = None
+    note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +62,7 @@ class UnresolvedToolCall:
     args: Any
     replay_safe: bool
     policy_known: bool
+    resolution_required: bool = False
 
 
 @dataclass(frozen=True)
@@ -60,6 +82,7 @@ class ContinuationRequest:
     observed_checkpoint_id: str | None
     message: str | None = None
     decisions: tuple[dict[str, Any], ...] = ()
+    resolutions: tuple[ToolCallResolution, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -85,7 +108,9 @@ _ALLOWED_ACTIONS = {
     ContinuationStatus.READY: frozenset({ContinuationAction.START_TURN}),
     ContinuationStatus.WAITING_HUMAN: frozenset({ContinuationAction.ANSWER_INTERRUPT}),
     ContinuationStatus.RESUMABLE: frozenset({ContinuationAction.CONTINUE}),
-    ContinuationStatus.OUTCOME_UNKNOWN: frozenset(),
+    ContinuationStatus.OUTCOME_UNKNOWN: frozenset(
+        {ContinuationAction.RESOLVE_AND_CONTINUE}
+    ),
     ContinuationStatus.NEEDS_REPAIR: frozenset(),
 }
 
@@ -131,6 +156,17 @@ class SessionContinuation:
             )
 
         input_value = self._build_input(request)
+        invocation_context = runtime.context
+        if request.action == ContinuationAction.RESOLVE_AND_CONTINUE:
+            recovery_plan = self._build_recovery_plan(latest, request)
+            invocation_context = replace(
+                runtime.context,
+                tool_recovery=recovery_plan,
+            )
+        elif request.resolutions:
+            raise InvalidContinuationAction(
+                f"{request.action.value} does not accept tool-call resolutions."
+            )
 
         # Touch only after both stale-state and action validation have succeeded,
         # immediately before real graph execution begins.
@@ -138,7 +174,7 @@ class SessionContinuation:
         value = await self._agent.ainvoke(
             input_value,
             config=runtime.invoke_config,
-            context=runtime.context,
+            context=invocation_context,
         )
         return ContinuationResult(
             value=value,
@@ -170,6 +206,69 @@ class SessionContinuation:
             return Command(resume={"decisions": list(request.decisions)})
 
         return None
+
+    def _build_recovery_plan(
+        self,
+        inspection: ContinuationInspection,
+        request: ContinuationRequest,
+    ) -> ToolRecoveryPlan:
+        unsafe_calls = {
+            call.id: call
+            for call in inspection.unresolved_tool_calls
+            if call.resolution_required
+        }
+        supplied: dict[str, ToolCallResolution] = {}
+        for resolution in request.resolutions:
+            if not isinstance(resolution.kind, ToolCallResolutionKind):
+                raise InvalidContinuationAction(
+                    f"Tool call {resolution.tool_call_id} has an unsupported "
+                    f"resolution kind: {resolution.kind}."
+                )
+            if (
+                resolution.kind == ToolCallResolutionKind.CONFIRM_SUCCEEDED
+                and resolution.note is not None
+            ):
+                raise InvalidContinuationAction(
+                    "CONFIRM_SUCCEEDED accepts result_summary, not note."
+                )
+            if (
+                resolution.kind != ToolCallResolutionKind.CONFIRM_SUCCEEDED
+                and resolution.result_summary is not None
+            ):
+                raise InvalidContinuationAction(
+                    f"{resolution.kind.value} does not accept result_summary."
+                )
+            if (
+                resolution.kind == ToolCallResolutionKind.RETRY_DESPITE_RISK
+                and resolution.note is not None
+            ):
+                raise InvalidContinuationAction(
+                    "RETRY_DESPITE_RISK does not accept a note."
+                )
+            if resolution.tool_call_id in supplied:
+                raise InvalidContinuationAction(
+                    "Each uncertain tool call requires exactly one resolution; "
+                    f"{resolution.tool_call_id} was supplied more than once."
+                )
+            if resolution.tool_call_id not in unsafe_calls:
+                raise InvalidContinuationAction(
+                    f"Tool call {resolution.tool_call_id} is not an unresolved "
+                    "replay-unsafe call in the inspected checkpoint."
+                )
+            supplied[resolution.tool_call_id] = resolution
+
+        missing = [call_id for call_id in unsafe_calls if call_id not in supplied]
+        if missing:
+            raise InvalidContinuationAction(
+                "A resolution is required for every unresolved replay-unsafe "
+                f"tool call; missing: {', '.join(missing)}."
+            )
+
+        directives = {
+            call_id: _to_recovery_directive(resolution)
+            for call_id, resolution in supplied.items()
+        }
+        return ToolRecoveryPlan(directives)
 
     def _classify(self, snapshot: Any) -> ContinuationInspection:
         if snapshot is None:
@@ -216,15 +315,54 @@ class SessionContinuation:
             unresolved,
         )
         structural_errors = [*protocol_errors, *interrupt_errors]
+        unprotected = [call for call in unresolved if call.id not in interrupt_call_ids]
+
+        if structural_errors:
+            unknown_outcome_calls = [
+                call for call in unprotected if not call.replay_safe
+            ]
+            uncertainty_warning = ""
+            if unknown_outcome_calls:
+                names = ", ".join(
+                    f"{call.name} ({call.id})" for call in unknown_outcome_calls
+                )
+                uncertainty_warning = (
+                    " External outcome may be unknown for unresolved tool call(s): "
+                    f"{names}. Verify external state before any future repair."
+                )
+
+            return _inspection(
+                status=ContinuationStatus.NEEDS_REPAIR,
+                checkpoint_id=checkpoint_id,
+                pending_nodes=pending_nodes,
+                interrupts=interrupts,
+                unresolved=unresolved,
+                reason=(
+                    "Persisted state is structurally inconsistent: "
+                    f"{structural_errors[0]} No checkpoint history was modified."
+                    f"{uncertainty_warning}"
+                ),
+            )
+
         has_continuation_path = bool(
             (getattr(snapshot, "next", ()) or ()) or pending_task_ids
         )
-        unprotected = [call for call in unresolved if call.id not in interrupt_call_ids]
+        # LangChain create_agent dispatches tool calls through the "tools" node.
+        # A pending model node cannot consume ToolRecoveryMiddleware directives.
+        has_tool_continuation_path = "tools" in pending_nodes
         uncertain = [
             call
             for call in unprotected
-            if has_continuation_path and not call.replay_safe
+            if has_tool_continuation_path and not call.replay_safe
         ]
+        uncertain_ids = {call.id for call in uncertain}
+        unresolved = tuple(
+            replace(
+                call,
+                resolution_required=call.id in uncertain_ids,
+            )
+            for call in unresolved
+        )
 
         if uncertain:
             names = ", ".join(f"{call.name} ({call.id})" for call in uncertain)
@@ -241,19 +379,6 @@ class SessionContinuation:
                 ),
             )
 
-        if structural_errors:
-            return _inspection(
-                status=ContinuationStatus.NEEDS_REPAIR,
-                checkpoint_id=checkpoint_id,
-                pending_nodes=pending_nodes,
-                interrupts=interrupts,
-                unresolved=unresolved,
-                reason=(
-                    "Persisted state is structurally inconsistent: "
-                    f"{structural_errors[0]} No checkpoint history was modified."
-                ),
-            )
-
         if interrupts:
             return _inspection(
                 status=ContinuationStatus.WAITING_HUMAN,
@@ -267,16 +392,24 @@ class SessionContinuation:
                 ),
             )
 
-        if unresolved and not has_continuation_path:
+        if unresolved and not has_tool_continuation_path:
             ids = ", ".join(call.id for call in unresolved)
+            uncertainty_warning = (
+                " The external outcome may be unknown for one or more calls; "
+                "ordinary continuation is still blocked because no pending tool "
+                "execution path exists."
+                if any(not call.replay_safe for call in unresolved)
+                else ""
+            )
             return _inspection(
                 status=ContinuationStatus.NEEDS_REPAIR,
                 checkpoint_id=checkpoint_id,
                 pending_nodes=pending_nodes,
                 unresolved=unresolved,
                 reason=(
-                    "Tool call(s) have no matching result and no pending graph path: "
-                    f"{ids}. The history requires explicit repair."
+                    "Tool call(s) have no matching result and no pending tool "
+                    f"execution path: {ids}. The history requires explicit repair."
+                    f"{uncertainty_warning}"
                 ),
             )
 
@@ -524,3 +657,24 @@ def _match_hitl_calls(
                 matched.add(match.id)
 
     return matched, errors
+
+
+def _to_recovery_directive(
+    resolution: ToolCallResolution,
+) -> ToolRecoveryDirective:
+    if resolution.kind == ToolCallResolutionKind.CONFIRM_SUCCEEDED:
+        kind = RecoveryDirectiveKind.SYNTHETIC_SUCCESS
+    elif resolution.kind in {
+        ToolCallResolutionKind.CONFIRM_NOT_APPLIED,
+        ToolCallResolutionKind.RECORD_OUTCOME_UNKNOWN,
+    }:
+        kind = RecoveryDirectiveKind.SYNTHETIC_ERROR
+    else:
+        kind = RecoveryDirectiveKind.RETRY
+
+    return ToolRecoveryDirective(
+        kind=kind,
+        resolution_kind=resolution.kind.value,
+        result_summary=resolution.result_summary,
+        note=resolution.note,
+    )

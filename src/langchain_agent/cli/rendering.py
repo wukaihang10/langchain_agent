@@ -63,10 +63,27 @@ def render_continuation(inspection: ContinuationInspection) -> None:
         print("Pending nodes: " + ", ".join(inspection.pending_nodes))
 
     if inspection.unresolved_tool_calls:
-        calls = ", ".join(
-            f"{call.name} ({call.id})" for call in inspection.unresolved_tool_calls
+        automatic = ", ".join(
+            f"{call.name}{('[' + (call.args.get('subagent_type') or '') + ']' if call.name == 'task' else '')} ({call.id})"
+            for call in inspection.unresolved_tool_calls
+            if call.replay_safe
         )
-        print("Unresolved tools: " + calls)
+        uncertain = ", ".join(
+            f"{call.name}{('[' + (call.args.get('subagent_type') or '') + ']' if call.name == 'task' else '')} ({call.id})"
+            for call in inspection.unresolved_tool_calls
+            if call.resolution_required
+        )
+        pending = ", ".join(
+            f"{call.name}{('[' + (call.args.get('subagent_type') or '') + ']' if call.name == 'task' else '')} ({call.id})"
+            for call in inspection.unresolved_tool_calls
+            if not call.replay_safe and not call.resolution_required
+        )
+        if automatic:
+            print("Automatic retry Tools: " + automatic)
+        if uncertain:
+            print("Requires resolution Tools: " + uncertain)
+        if pending:
+            print("Pending Tools for approval: " + pending)
 
     for interrupt in inspection.interrupts:
         value = interrupt.value
@@ -81,10 +98,10 @@ def render_continuation(inspection: ContinuationInspection) -> None:
         for index, action in enumerate(action_requests):
             if not isinstance(action, Mapping):
                 continue
-            print("Tool:", action.get("name", "unknown"))
-            print("Arguments:", action.get("args", {}))
+            # print("Tool:", action.get("name", "unknown"))
+            # print("Arguments:", action.get("args", {}))
             if description := action.get("description"):
-                print("Reason:", description)
+                print("Tool Interrupt:", description)
 
             review_config = (
                 review_configs[index]
@@ -99,7 +116,12 @@ def render_continuation(inspection: ContinuationInspection) -> None:
 
     if inspection.allowed_actions:
         if any(
-            action.value in {"CONTINUE", "ANSWER_INTERRUPT"}
+            action.value
+            in {
+                "CONTINUE",
+                "ANSWER_INTERRUPT",
+                "RESOLVE_AND_CONTINUE",
+            }
             for action in inspection.allowed_actions
         ):
             print("Next: enter /continue.")

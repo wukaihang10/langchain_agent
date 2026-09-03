@@ -11,7 +11,10 @@ from langchain_agent.app.session_continuation import (
     InvalidContinuationAction,
     SessionContinuation,
     StaleContinuationError,
+    ToolCallResolution,
+    ToolCallResolutionKind,
 )
+from langchain_agent.app.context import AgentContext
 from langchain_agent.harness.permissions.models import (
     ToolCategory,
     ToolPolicy,
@@ -114,7 +117,10 @@ def runtime():
     return SimpleNamespace(
         session=SimpleNamespace(thread_id="thread-1"),
         invoke_config={"configurable": {"thread_id": "thread-1"}},
-        context=object(),
+        context=AgentContext(
+            repository_path="C:/repository",
+            repository_knowledge=object(),
+        ),
     )
 
 
@@ -231,7 +237,10 @@ class SessionContinuationInspectionTests(unittest.IsolatedAsyncioTestCase):
                     inspection.status,
                     ContinuationStatus.OUTCOME_UNKNOWN,
                 )
-                self.assertFalse(inspection.allowed_actions)
+                self.assertEqual(
+                    inspection.allowed_actions,
+                    {ContinuationAction.RESOLVE_AND_CONTINUE},
+                )
 
     async def test_independent_unsafe_call_overrides_hitl_interrupt(self):
         interrupt = Interrupt(
@@ -262,6 +271,14 @@ class SessionContinuationInspectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(inspection.status, ContinuationStatus.OUTCOME_UNKNOWN)
         self.assertIn("independent-id", inspection.reason)
+        self.assertEqual(
+            [
+                call.id
+                for call in inspection.unresolved_tool_calls
+                if call.resolution_required
+            ],
+            ["independent-id"],
+        )
 
     async def test_terminal_tool_history_is_ready_and_orphan_result_needs_repair(self):
         continuation, _, _ = service(
@@ -302,6 +319,10 @@ class SessionContinuationInspectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(inspection.status, ContinuationStatus.OUTCOME_UNKNOWN)
         self.assertEqual(
+            inspection.allowed_actions,
+            {ContinuationAction.RESOLVE_AND_CONTINUE},
+        )
+        self.assertEqual(
             [call.id for call in inspection.unresolved_tool_calls],
             ["unsafe-id"],
         )
@@ -340,7 +361,33 @@ class SessionContinuationInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inspection.status, ContinuationStatus.NEEDS_REPAIR)
         self.assertFalse(inspection.allowed_actions)
 
-    async def test_unknown_outcome_precedes_protocol_repair(self):
+        continuation, _, _ = service(
+            snapshot(messages=[ai_call(("unsafe-id", "write", {}))]),
+            policies={"write": UNSAFE_POLICY},
+        )
+        unsafe = await continuation.inspect(runtime())
+        self.assertEqual(unsafe.status, ContinuationStatus.NEEDS_REPAIR)
+        self.assertIn("external outcome may be unknown", unsafe.reason.lower())
+
+    async def test_tool_call_bypassed_by_human_and_pending_model_needs_repair(self):
+        continuation, _, _ = service(
+            snapshot(
+                messages=[
+                    ai_call(("unsafe-id", "task", {})),
+                    HumanMessage(content="hello"),
+                ],
+                next_nodes=["model"],
+            ),
+            policies={"task": UNSAFE_POLICY},
+        )
+
+        inspection = await continuation.inspect(runtime())
+
+        self.assertEqual(inspection.status, ContinuationStatus.NEEDS_REPAIR)
+        self.assertFalse(inspection.allowed_actions)
+        self.assertIn("structurally inconsistent", inspection.reason.lower())
+
+    async def test_protocol_repair_blocks_unknown_outcome_resolution(self):
         continuation, _, _ = service(
             snapshot(
                 messages=[
@@ -354,10 +401,153 @@ class SessionContinuationInspectionTests(unittest.IsolatedAsyncioTestCase):
 
         inspection = await continuation.inspect(runtime())
 
-        self.assertEqual(inspection.status, ContinuationStatus.OUTCOME_UNKNOWN)
+        self.assertEqual(inspection.status, ContinuationStatus.NEEDS_REPAIR)
+        self.assertFalse(inspection.allowed_actions)
+        self.assertIn("external outcome may be unknown", inspection.reason.lower())
 
 
 class SessionContinuationExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_confirmed_success_is_translated_to_recovery_plan(self):
+        pending = snapshot(
+            messages=[ai_call(("write-id", "write", {"value": 1}))],
+            next_nodes=["tools"],
+        )
+        continuation, agent, store = service(
+            pending,
+            policies={"write": UNSAFE_POLICY},
+            state_after_invoke=snapshot(checkpoint_id="checkpoint-2"),
+        )
+
+        await continuation.execute(
+            runtime(),
+            ContinuationRequest(
+                action=ContinuationAction.RESOLVE_AND_CONTINUE,
+                observed_checkpoint_id="checkpoint-1",
+                resolutions=(
+                    ToolCallResolution(
+                        tool_call_id="write-id",
+                        kind=ToolCallResolutionKind.CONFIRM_SUCCEEDED,
+                        result_summary="created resource 42",
+                    ),
+                ),
+            ),
+        )
+
+        invocation_context = agent.invocations[0][2]
+        directive = invocation_context.tool_recovery.directives["write-id"]
+        self.assertEqual(directive.resolution_kind, "CONFIRM_SUCCEEDED")
+        self.assertEqual(directive.result_summary, "created resource 42")
+        self.assertEqual(store.touched, ["thread-1"])
+
+    async def test_invalid_recovery_plan_is_rejected_without_work(self):
+        pending = snapshot(
+            messages=[
+                ai_call(
+                    ("unsafe-1", "write", {"value": 1}),
+                    ("unsafe-2", "write", {"value": 2}),
+                    ("safe-1", "search", {"q": "x"}),
+                )
+            ],
+            next_nodes=["tools"],
+        )
+        invalid_resolutions = (
+            (),
+            (
+                ToolCallResolution(
+                    "unsafe-1", ToolCallResolutionKind.CONFIRM_SUCCEEDED
+                ),
+            ),
+            (
+                ToolCallResolution(
+                    "unsafe-1", ToolCallResolutionKind.CONFIRM_SUCCEEDED
+                ),
+                ToolCallResolution(
+                    "unsafe-1", ToolCallResolutionKind.RECORD_OUTCOME_UNKNOWN
+                ),
+                ToolCallResolution(
+                    "unsafe-2", ToolCallResolutionKind.CONFIRM_NOT_APPLIED
+                ),
+            ),
+            (
+                ToolCallResolution(
+                    "unsafe-1", ToolCallResolutionKind.CONFIRM_SUCCEEDED
+                ),
+                ToolCallResolution(
+                    "unsafe-2", ToolCallResolutionKind.CONFIRM_NOT_APPLIED
+                ),
+                ToolCallResolution(
+                    "safe-1", ToolCallResolutionKind.RETRY_DESPITE_RISK
+                ),
+            ),
+            (
+                ToolCallResolution(
+                    "unsafe-1", ToolCallResolutionKind.CONFIRM_SUCCEEDED
+                ),
+                ToolCallResolution(
+                    "unsafe-2", ToolCallResolutionKind.CONFIRM_NOT_APPLIED
+                ),
+                ToolCallResolution(
+                    "missing", ToolCallResolutionKind.RETRY_DESPITE_RISK
+                ),
+            ),
+            (
+                ToolCallResolution("unsafe-1", "INVALID"),  # type: ignore[arg-type]
+                ToolCallResolution(
+                    "unsafe-2", ToolCallResolutionKind.CONFIRM_NOT_APPLIED
+                ),
+            ),
+            (
+                ToolCallResolution(
+                    "unsafe-1",
+                    ToolCallResolutionKind.CONFIRM_SUCCEEDED,
+                    note="wrong field",
+                ),
+                ToolCallResolution(
+                    "unsafe-2", ToolCallResolutionKind.CONFIRM_NOT_APPLIED
+                ),
+            ),
+        )
+
+        for resolutions in invalid_resolutions:
+            with self.subTest(resolutions=resolutions):
+                continuation, agent, store = service(
+                    pending,
+                    policies={"write": UNSAFE_POLICY, "search": SAFE_POLICY},
+                )
+                with self.assertRaises(InvalidContinuationAction):
+                    await continuation.execute(
+                        runtime(),
+                        ContinuationRequest(
+                            action=ContinuationAction.RESOLVE_AND_CONTINUE,
+                            observed_checkpoint_id="checkpoint-1",
+                            resolutions=resolutions,
+                        ),
+                    )
+                self.assertFalse(store.touched)
+                self.assertFalse(agent.invocations)
+
+    async def test_stale_recovery_plan_is_rejected_before_plan_validation(self):
+        continuation, agent, store = service(
+            snapshot(
+                checkpoint_id="checkpoint-2",
+                messages=[ai_call(("unsafe-1", "write", {}))],
+                next_nodes=["tools"],
+            ),
+            policies={"write": UNSAFE_POLICY},
+        )
+
+        with self.assertRaises(StaleContinuationError):
+            await continuation.execute(
+                runtime(),
+                ContinuationRequest(
+                    action=ContinuationAction.RESOLVE_AND_CONTINUE,
+                    observed_checkpoint_id="checkpoint-1",
+                ),
+            )
+
+        self.assertFalse(store.touched)
+        self.assertFalse(agent.invocations)
+
     async def test_start_turn_validates_then_touches_and_invokes_human_input(self):
         continuation, agent, store = service(
             snapshot(checkpoint_id=None),
