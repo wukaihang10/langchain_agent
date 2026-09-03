@@ -52,28 +52,35 @@ class TurnRecoveryMiddlewareTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(model_result.result[0].content, "real model")
         self.assertEqual(calls, ["tool", "model"])
 
-    async def test_terminate_plan_rejects_any_directive_that_could_execute_a_tool(self):
+    async def test_plans_reject_directives_from_the_other_mode(self):
         with self.assertRaisesRegex(ValueError, "TERMINATE"):
             TurnRecoveryPlan(
                 TurnRecoveryMode.TERMINATE,
                 {
                     "call-1": ToolRecoveryDirective(
-                        kind=RecoveryDirectiveKind.RETRY,
-                        resolution_kind="RETRY_DESPITE_RISK",
+                        RecoveryDirectiveKind.OUTCOME_UNKNOWN,
                     )
                 },
             )
 
-    async def test_confirmed_success_is_auditable_without_execution(self):
+        with self.assertRaisesRegex(ValueError, "CONTINUE"):
+            TurnRecoveryPlan(
+                TurnRecoveryMode.CONTINUE,
+                {
+                    "call-1": ToolRecoveryDirective(
+                        RecoveryDirectiveKind.CANCELLED_BY_TERMINATION,
+                    )
+                },
+            )
+
+    async def test_continue_records_unknown_outcome_without_execution(self):
         plan = TurnRecoveryPlan(
             TurnRecoveryMode.CONTINUE,
             {
                 "call-1": ToolRecoveryDirective(
-                    kind=RecoveryDirectiveKind.SYNTHETIC_SUCCESS,
-                    resolution_kind="CONFIRM_SUCCEEDED",
-                    result_summary="created item 42",
+                    RecoveryDirectiveKind.OUTCOME_UNKNOWN,
                 )
-            }
+            },
         )
         executions = 0
 
@@ -82,84 +89,27 @@ class TurnRecoveryMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             executions += 1
             return ToolMessage(content="real", tool_call_id="call-1")
 
-        result = await TurnRecoveryMiddleware().awrap_tool_call(
-            request(plan), handler
-        )
-
-        self.assertEqual(executions, 0)
-        self.assertEqual(result.tool_call_id, "call-1")
-        self.assertEqual(result.status, "success")
-        self.assertIn("verified by the user", result.content)
-        self.assertIn("created item 42", result.content)
-        self.assertEqual(
-            result.additional_kwargs["recovery"],
-            {"generated": True, "resolution_kind": "CONFIRM_SUCCEEDED"},
-        )
-
-    async def test_error_resolutions_are_truthful_and_do_not_execute(self):
-        cases = (
-            (
-                "CONFIRM_NOT_APPLIED",
-                "did not take effect",
-                "checked the remote list",
-            ),
-            (
-                "RECORD_OUTCOME_UNKNOWN",
-                "may have succeeded or failed",
-                "cannot access the service",
-            ),
-        )
-        for resolution_kind, expected, note in cases:
-            with self.subTest(resolution_kind=resolution_kind):
-                plan = TurnRecoveryPlan(
-                    TurnRecoveryMode.CONTINUE,
-                    {
-                        "call-1": ToolRecoveryDirective(
-                            kind=RecoveryDirectiveKind.SYNTHETIC_ERROR,
-                            resolution_kind=resolution_kind,
-                            note=note,
-                        )
-                    }
-                )
-
-                async def handler(_request):
-                    self.fail("synthetic recovery must bypass real execution")
-
-                result = await TurnRecoveryMiddleware().awrap_tool_call(
-                    request(plan), handler
-                )
-
-                self.assertEqual(result.status, "error")
-                self.assertIn(expected, result.content)
-                self.assertIn(note, result.content)
-                if resolution_kind == "RECORD_OUTCOME_UNKNOWN":
-                    self.assertIn("No retry was performed", result.content)
-
-    async def test_explicit_retry_executes_once_and_directive_cannot_be_reused(self):
-        plan = TurnRecoveryPlan(
-            TurnRecoveryMode.CONTINUE,
-            {
-                "call-1": ToolRecoveryDirective(
-                    kind=RecoveryDirectiveKind.RETRY,
-                    resolution_kind="RETRY_DESPITE_RISK",
-                )
-            }
-        )
-        executions = 0
-
-        async def handler(_request):
-            nonlocal executions
-            executions += 1
-            return ToolMessage(content="retried", tool_call_id="call-1")
-
         middleware = TurnRecoveryMiddleware()
         result = await middleware.awrap_tool_call(request(plan), handler)
 
-        self.assertEqual(result.content, "retried")
-        self.assertEqual(executions, 1)
+        self.assertEqual(executions, 0)
+        self.assertEqual(result.tool_call_id, "call-1")
+        self.assertEqual(result.status, "error")
+        self.assertIn("may have succeeded or failed", result.content)
+        self.assertIn("No retry was performed", result.content)
+        self.assertIn("Do not infer success or failure", result.content)
+        self.assertIn("Verify external state with a read-only operation", result.content)
+        self.assertEqual(
+            result.additional_kwargs["recovery"],
+            {
+                "generated": True,
+                "kind": "OUTCOME_UNKNOWN",
+                "outcome": "outcome_unknown",
+            },
+        )
         with self.assertRaisesRegex(RuntimeError, "already consumed"):
             await middleware.awrap_tool_call(request(plan), handler)
-        self.assertEqual(executions, 1)
+        self.assertEqual(executions, 0)
 
     async def test_terminate_mode_returns_terminal_message_without_calling_model(self):
         plan = TurnRecoveryPlan(TurnRecoveryMode.TERMINATE, {})
@@ -196,14 +146,13 @@ class TurnRecoveryMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        for resolution_kind, expected_content, outcome in cases:
-            with self.subTest(resolution_kind=resolution_kind):
+        for directive_kind, expected_content, outcome in cases:
+            with self.subTest(directive_kind=directive_kind):
                 plan = TurnRecoveryPlan(
                     TurnRecoveryMode.TERMINATE,
                     {
                         "call-1": ToolRecoveryDirective(
-                            kind=RecoveryDirectiveKind.SYNTHETIC_ERROR,
-                            resolution_kind=resolution_kind,
+                            RecoveryDirectiveKind(directive_kind),
                         )
                     },
                 )
@@ -223,7 +172,7 @@ class TurnRecoveryMiddlewareTests(unittest.IsolatedAsyncioTestCase):
                     {
                         "generated": True,
                         "action": "TERMINATE_TURN",
-                        "resolution_kind": resolution_kind,
+                        "kind": directive_kind,
                         "outcome": outcome,
                     },
                 )

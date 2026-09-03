@@ -9,12 +9,9 @@ from langchain_agent.app.session_continuation import (
     ContinuationResult,
     ContinuationStatus,
     PendingInterrupt,
-    ToolCallResolution,
-    ToolCallResolutionKind,
     UnresolvedToolCall,
 )
 from langchain_agent.cli.app import _execute_with_live_hitl, run_cli
-from langchain_agent.cli.recovery import collect_tool_call_resolutions
 from langchain_agent.cli.rendering import render_continuation
 
 
@@ -31,7 +28,7 @@ def inspection(status, *, checkpoint_id, interrupts=(), unresolved=()):
             ContinuationAction.TERMINATE_TURN,
         },
         ContinuationStatus.OUTCOME_UNKNOWN: {
-            ContinuationAction.RESOLVE_AND_CONTINUE,
+            ContinuationAction.CONTINUE,
             ContinuationAction.TERMINATE_TURN,
         },
         ContinuationStatus.NEEDS_REPAIR: set(),
@@ -80,7 +77,7 @@ class ContinuationRenderingTests(unittest.TestCase):
         self.assertEqual(rendered.count("Status:"), 1)
         self.assertIn("Status: OUTCOME_UNKNOWN", rendered)
         self.assertIn("Automatic retry Tools: search (safe)", rendered)
-        self.assertIn("Requires resolution Tools: create (unsafe)", rendered)
+        self.assertIn("Outcome-unknown Tools: create (unsafe)", rendered)
         self.assertIn("/continue", rendered)
         self.assertIn("/terminate", rendered)
 
@@ -173,7 +170,7 @@ class LiveHitlRoutingTests(unittest.IsolatedAsyncioTestCase):
         render.assert_not_called()
         collect_hitl_decisions.assert_called_once_with((interrupt,))
 
-    async def test_outcome_unknown_continue_submits_collected_resolutions(self):
+    async def test_outcome_unknown_continue_needs_no_user_resolution(self):
         uncertain_call = UnresolvedToolCall(
             "unsafe-id", "create", {"name": "x"}, False, True, True
         )
@@ -183,10 +180,6 @@ class LiveHitlRoutingTests(unittest.IsolatedAsyncioTestCase):
             unresolved=(uncertain_call,),
         )
         ready = inspection(ContinuationStatus.READY, checkpoint_id="checkpoint-2")
-        resolution = ToolCallResolution(
-            "unsafe-id",
-            ToolCallResolutionKind.RECORD_OUTCOME_UNKNOWN,
-        )
         continuation = SimpleNamespace(
             inspect=AsyncMock(return_value=uncertain),
             execute=AsyncMock(
@@ -217,10 +210,6 @@ class LiveHitlRoutingTests(unittest.IsolatedAsyncioTestCase):
                 "langchain_agent.cli.app._build_session_runtime",
                 return_value=runtime,
             ),
-            patch(
-                "langchain_agent.cli.app.collect_tool_call_resolutions",
-                return_value=[resolution],
-            ) as collect,
             patch("langchain_agent.cli.app.render_active_session"),
             patch("langchain_agent.cli.app.render_continuation"),
             patch("langchain_agent.cli.app.render_result"),
@@ -229,10 +218,8 @@ class LiveHitlRoutingTests(unittest.IsolatedAsyncioTestCase):
             await run_cli(application)
 
         request = continuation.execute.await_args.args[1]
-        self.assertEqual(request.action, ContinuationAction.RESOLVE_AND_CONTINUE)
+        self.assertEqual(request.action, ContinuationAction.CONTINUE)
         self.assertEqual(request.observed_checkpoint_id, "checkpoint-1")
-        self.assertEqual(request.resolutions, (resolution,))
-        collect.assert_called_once_with((uncertain_call,))
 
     async def test_terminate_command_submits_only_the_checkpoint_guard(self):
         uncertain_call = UnresolvedToolCall(
@@ -275,9 +262,6 @@ class LiveHitlRoutingTests(unittest.IsolatedAsyncioTestCase):
                 return_value=runtime,
             ),
             patch("langchain_agent.cli.app.collect_hitl_decisions") as collect_hitl,
-            patch(
-                "langchain_agent.cli.app.collect_tool_call_resolutions"
-            ) as collect_recovery,
             patch("langchain_agent.cli.app.render_active_session"),
             patch("langchain_agent.cli.app.render_continuation"),
             patch("langchain_agent.cli.app.render_result"),
@@ -290,49 +274,7 @@ class LiveHitlRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.observed_checkpoint_id, "checkpoint-1")
         self.assertIsNone(request.message)
         self.assertFalse(request.decisions)
-        self.assertFalse(request.resolutions)
         collect_hitl.assert_not_called()
-        collect_recovery.assert_not_called()
-
-
-class ToolRecoveryPromptTests(unittest.TestCase):
-    @patch(
-        "builtins.input",
-        side_effect=[
-            "1",
-            "resource 42",
-            "3",
-            "n",
-            "3",
-            "y",
-        ],
-    )
-    def test_collects_only_unsafe_calls_and_confirms_risky_retry(self, _input):
-        calls = (
-            UnresolvedToolCall("safe", "search", {}, True, True),
-            UnresolvedToolCall(
-                "success", "create", {"name": "x"}, False, True, True
-            ),
-            UnresolvedToolCall("retry", "send", {"id": 1}, False, True, True),
-        )
-
-        with patch("sys.stdout", io.StringIO()) as output:
-            resolutions = collect_tool_call_resolutions(calls)
-
-        self.assertEqual(
-            [item.tool_call_id for item in resolutions],
-            ["success", "retry"],
-        )
-        self.assertEqual(
-            resolutions[0].kind,
-            ToolCallResolutionKind.CONFIRM_SUCCEEDED,
-        )
-        self.assertEqual(resolutions[0].result_summary, "resource 42")
-        self.assertEqual(
-            resolutions[1].kind,
-            ToolCallResolutionKind.RETRY_DESPITE_RISK,
-        )
-        self.assertIn("duplicate side effect", output.getvalue().lower())
 
 
 if __name__ == "__main__":

@@ -71,17 +71,17 @@ def render_continuation(inspection: ContinuationInspection) -> None:
         uncertain = ", ".join(
             f"{call.name}{('[' + (call.args.get('subagent_type') or '') + ']' if call.name == 'task' else '')} ({call.id})"
             for call in inspection.unresolved_tool_calls
-            if call.resolution_required
+            if call.outcome_unknown
         )
         pending = ", ".join(
             f"{call.name}{('[' + (call.args.get('subagent_type') or '') + ']' if call.name == 'task' else '')} ({call.id})"
             for call in inspection.unresolved_tool_calls
-            if not call.replay_safe and not call.resolution_required
+            if not call.replay_safe and not call.outcome_unknown
         )
         if automatic:
             print("Automatic retry Tools: " + automatic)
         if uncertain:
-            print("Requires resolution Tools: " + uncertain)
+            print("Outcome-unknown Tools: " + uncertain)
         if pending:
             print("Pending Tools for approval: " + pending)
 
@@ -120,7 +120,6 @@ def render_continuation(inspection: ContinuationInspection) -> None:
             in {
                 "CONTINUE",
                 "ANSWER_INTERRUPT",
-                "RESOLVE_AND_CONTINUE",
             }
             for action in inspection.allowed_actions
         ):

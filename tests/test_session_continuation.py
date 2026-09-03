@@ -11,8 +11,6 @@ from langchain_agent.app.session_continuation import (
     InvalidContinuationAction,
     SessionContinuation,
     StaleContinuationError,
-    ToolCallResolution,
-    ToolCallResolutionKind,
 )
 from langchain_agent.app.context import AgentContext
 from langchain_agent.harness.permissions.models import (
@@ -21,7 +19,10 @@ from langchain_agent.harness.permissions.models import (
     ToolRisk,
 )
 from langchain_agent.harness.permissions.registry import ToolPolicyRegistry
-from langchain_agent.harness.middleware.turn_recovery import TurnRecoveryMode
+from langchain_agent.harness.middleware.turn_recovery import (
+    RecoveryDirectiveKind,
+    TurnRecoveryMode,
+)
 
 SAFE_POLICY = ToolPolicy(
     category=ToolCategory.READ,
@@ -178,7 +179,7 @@ class SessionContinuationInspectionTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 {"write": UNSAFE_POLICY},
                 {
-                    ContinuationAction.RESOLVE_AND_CONTINUE,
+                    ContinuationAction.CONTINUE,
                     ContinuationAction.TERMINATE_TURN,
                 },
             ),
@@ -300,7 +301,7 @@ class SessionContinuationInspectionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     inspection.allowed_actions,
                     {
-                        ContinuationAction.RESOLVE_AND_CONTINUE,
+                        ContinuationAction.CONTINUE,
                         ContinuationAction.TERMINATE_TURN,
                     },
                 )
@@ -338,7 +339,7 @@ class SessionContinuationInspectionTests(unittest.IsolatedAsyncioTestCase):
             [
                 call.id
                 for call in inspection.unresolved_tool_calls
-                if call.resolution_required
+                if call.outcome_unknown
             ],
             ["independent-id"],
         )
@@ -384,7 +385,7 @@ class SessionContinuationInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             inspection.allowed_actions,
             {
-                ContinuationAction.RESOLVE_AND_CONTINUE,
+                ContinuationAction.CONTINUE,
                 ContinuationAction.TERMINATE_TURN,
             },
         )
@@ -453,7 +454,7 @@ class SessionContinuationInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(inspection.allowed_actions)
         self.assertIn("structurally inconsistent", inspection.reason.lower())
 
-    async def test_protocol_repair_blocks_unknown_outcome_resolution(self):
+    async def test_protocol_repair_blocks_unknown_outcome_continuation(self):
         continuation, _, _ = service(
             snapshot(
                 messages=[
@@ -532,8 +533,8 @@ class SessionContinuationExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             invocation_context.turn_recovery.directives[
                 "safe-1"
-            ].resolution_kind,
-            "CANCELLED_BY_TERMINATION",
+            ].kind,
+            RecoveryDirectiveKind.CANCELLED_BY_TERMINATION,
         )
 
     async def test_outcome_unknown_termination_records_each_unprotected_risk(self):
@@ -564,13 +565,13 @@ class SessionContinuationExecutionTests(unittest.IsolatedAsyncioTestCase):
         directives = agent.invocations[0][2].turn_recovery.directives
         self.assertEqual(
             {
-                call_id: directive.resolution_kind
+                call_id: directive.kind
                 for call_id, directive in directives.items()
             },
             {
-                "safe-id": "CANCELLED_BY_TERMINATION",
-                "unsafe-id": "OUTCOME_UNKNOWN_AT_TERMINATION",
-                "unknown-id": "OUTCOME_UNKNOWN_AT_TERMINATION",
+                "safe-id": RecoveryDirectiveKind.CANCELLED_BY_TERMINATION,
+                "unsafe-id": RecoveryDirectiveKind.OUTCOME_UNKNOWN_AT_TERMINATION,
+                "unknown-id": RecoveryDirectiveKind.OUTCOME_UNKNOWN_AT_TERMINATION,
             },
         )
 
@@ -635,14 +636,6 @@ class SessionContinuationExecutionTests(unittest.IsolatedAsyncioTestCase):
         invalid_payloads = (
             {"message": "new work"},
             {"decisions": ({"type": "reject"},)},
-            {
-                "resolutions": (
-                    ToolCallResolution(
-                        "call-1",
-                        ToolCallResolutionKind.RECORD_OUTCOME_UNKNOWN,
-                    ),
-                )
-            },
         )
 
         for payload in invalid_payloads:
@@ -705,7 +698,10 @@ class SessionContinuationExecutionTests(unittest.IsolatedAsyncioTestCase):
             TurnRecoveryMode.TERMINATE,
         )
         directive = invocation_context.turn_recovery.directives["safe-id"]
-        self.assertEqual(directive.resolution_kind, "CANCELLED_BY_TERMINATION")
+        self.assertEqual(
+            directive.kind,
+            RecoveryDirectiveKind.CANCELLED_BY_TERMINATION,
+        )
         self.assertEqual(store.touched, ["thread-1"])
         self.assertEqual(result.inspection.status, ContinuationStatus.READY)
 
@@ -732,7 +728,7 @@ class SessionContinuationExecutionTests(unittest.IsolatedAsyncioTestCase):
             result.inspection.allowed_actions,
         )
 
-    async def test_confirmed_success_is_translated_to_recovery_plan(self):
+    async def test_unknown_outcome_is_automatically_translated_to_recovery_plan(self):
         pending = snapshot(
             messages=[ai_call(("write-id", "write", {"value": 1}))],
             next_nodes=["tools"],
@@ -746,15 +742,8 @@ class SessionContinuationExecutionTests(unittest.IsolatedAsyncioTestCase):
         await continuation.execute(
             runtime(),
             ContinuationRequest(
-                action=ContinuationAction.RESOLVE_AND_CONTINUE,
+                action=ContinuationAction.CONTINUE,
                 observed_checkpoint_id="checkpoint-1",
-                resolutions=(
-                    ToolCallResolution(
-                        tool_call_id="write-id",
-                        kind=ToolCallResolutionKind.CONFIRM_SUCCEEDED,
-                        result_summary="created resource 42",
-                    ),
-                ),
             ),
         )
 
@@ -764,11 +753,10 @@ class SessionContinuationExecutionTests(unittest.IsolatedAsyncioTestCase):
             TurnRecoveryMode.CONTINUE,
         )
         directive = invocation_context.turn_recovery.directives["write-id"]
-        self.assertEqual(directive.resolution_kind, "CONFIRM_SUCCEEDED")
-        self.assertEqual(directive.result_summary, "created resource 42")
+        self.assertEqual(directive.kind, RecoveryDirectiveKind.OUTCOME_UNKNOWN)
         self.assertEqual(store.touched, ["thread-1"])
 
-    async def test_invalid_recovery_plan_is_rejected_without_work(self):
+    async def test_outcome_unknown_plan_covers_only_replay_unsafe_calls(self):
         pending = snapshot(
             messages=[
                 ai_call(
@@ -779,81 +767,32 @@ class SessionContinuationExecutionTests(unittest.IsolatedAsyncioTestCase):
             ],
             next_nodes=["tools"],
         )
-        invalid_resolutions = (
-            (),
-            (
-                ToolCallResolution(
-                    "unsafe-1", ToolCallResolutionKind.CONFIRM_SUCCEEDED
-                ),
-            ),
-            (
-                ToolCallResolution(
-                    "unsafe-1", ToolCallResolutionKind.CONFIRM_SUCCEEDED
-                ),
-                ToolCallResolution(
-                    "unsafe-1", ToolCallResolutionKind.RECORD_OUTCOME_UNKNOWN
-                ),
-                ToolCallResolution(
-                    "unsafe-2", ToolCallResolutionKind.CONFIRM_NOT_APPLIED
-                ),
-            ),
-            (
-                ToolCallResolution(
-                    "unsafe-1", ToolCallResolutionKind.CONFIRM_SUCCEEDED
-                ),
-                ToolCallResolution(
-                    "unsafe-2", ToolCallResolutionKind.CONFIRM_NOT_APPLIED
-                ),
-                ToolCallResolution(
-                    "safe-1", ToolCallResolutionKind.RETRY_DESPITE_RISK
-                ),
-            ),
-            (
-                ToolCallResolution(
-                    "unsafe-1", ToolCallResolutionKind.CONFIRM_SUCCEEDED
-                ),
-                ToolCallResolution(
-                    "unsafe-2", ToolCallResolutionKind.CONFIRM_NOT_APPLIED
-                ),
-                ToolCallResolution(
-                    "missing", ToolCallResolutionKind.RETRY_DESPITE_RISK
-                ),
-            ),
-            (
-                ToolCallResolution("unsafe-1", "INVALID"),  # type: ignore[arg-type]
-                ToolCallResolution(
-                    "unsafe-2", ToolCallResolutionKind.CONFIRM_NOT_APPLIED
-                ),
-            ),
-            (
-                ToolCallResolution(
-                    "unsafe-1",
-                    ToolCallResolutionKind.CONFIRM_SUCCEEDED,
-                    note="wrong field",
-                ),
-                ToolCallResolution(
-                    "unsafe-2", ToolCallResolutionKind.CONFIRM_NOT_APPLIED
-                ),
+        continuation, agent, store = service(
+            pending,
+            policies={"write": UNSAFE_POLICY, "search": SAFE_POLICY},
+            state_after_invoke=snapshot(checkpoint_id="checkpoint-2"),
+        )
+
+        await continuation.execute(
+            runtime(),
+            ContinuationRequest(
+                action=ContinuationAction.CONTINUE,
+                observed_checkpoint_id="checkpoint-1",
             ),
         )
 
-        for resolutions in invalid_resolutions:
-            with self.subTest(resolutions=resolutions):
-                continuation, agent, store = service(
-                    pending,
-                    policies={"write": UNSAFE_POLICY, "search": SAFE_POLICY},
-                )
-                with self.assertRaises(InvalidContinuationAction):
-                    await continuation.execute(
-                        runtime(),
-                        ContinuationRequest(
-                            action=ContinuationAction.RESOLVE_AND_CONTINUE,
-                            observed_checkpoint_id="checkpoint-1",
-                            resolutions=resolutions,
-                        ),
-                    )
-                self.assertFalse(store.touched)
-                self.assertFalse(agent.invocations)
+        plan = agent.invocations[0][2].turn_recovery
+        self.assertEqual(
+            set(plan.directives),
+            {"unsafe-1", "unsafe-2"},
+        )
+        self.assertTrue(
+            all(
+                directive.kind == RecoveryDirectiveKind.OUTCOME_UNKNOWN
+                for directive in plan.directives.values()
+            )
+        )
+        self.assertEqual(store.touched, ["thread-1"])
 
     async def test_stale_recovery_plan_is_rejected_before_plan_validation(self):
         continuation, agent, store = service(
@@ -869,7 +808,7 @@ class SessionContinuationExecutionTests(unittest.IsolatedAsyncioTestCase):
             await continuation.execute(
                 runtime(),
                 ContinuationRequest(
-                    action=ContinuationAction.RESOLVE_AND_CONTINUE,
+                    action=ContinuationAction.CONTINUE,
                     observed_checkpoint_id="checkpoint-1",
                 ),
             )

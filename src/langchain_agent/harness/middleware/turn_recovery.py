@@ -19,17 +19,14 @@ class TurnRecoveryMode(StrEnum):
 
 
 class RecoveryDirectiveKind(StrEnum):
-    SYNTHETIC_SUCCESS = "SYNTHETIC_SUCCESS"
-    SYNTHETIC_ERROR = "SYNTHETIC_ERROR"
-    RETRY = "RETRY"
+    OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN"
+    CANCELLED_BY_TERMINATION = "CANCELLED_BY_TERMINATION"
+    OUTCOME_UNKNOWN_AT_TERMINATION = "OUTCOME_UNKNOWN_AT_TERMINATION"
 
 
 @dataclass(frozen=True)
 class ToolRecoveryDirective:
     kind: RecoveryDirectiveKind
-    resolution_kind: str
-    result_summary: str | None = None
-    note: str | None = None
 
 
 @dataclass
@@ -44,23 +41,22 @@ class TurnRecoveryPlan:
     def __post_init__(self) -> None:
         directives = dict(self.directives)
         termination_kinds = {
-            "CANCELLED_BY_TERMINATION",
-            "OUTCOME_UNKNOWN_AT_TERMINATION",
+            RecoveryDirectiveKind.CANCELLED_BY_TERMINATION,
+            RecoveryDirectiveKind.OUTCOME_UNKNOWN_AT_TERMINATION,
         }
         if self.mode == TurnRecoveryMode.TERMINATE and any(
-            directive.kind != RecoveryDirectiveKind.SYNTHETIC_ERROR
-            or directive.resolution_kind not in termination_kinds
+            directive.kind not in termination_kinds
             for directive in directives.values()
         ):
             raise ValueError(
                 "TERMINATE plans may contain only synthetic termination errors."
             )
         if self.mode == TurnRecoveryMode.CONTINUE and any(
-            directive.resolution_kind in termination_kinds
+            directive.kind != RecoveryDirectiveKind.OUTCOME_UNKNOWN
             for directive in directives.values()
         ):
             raise ValueError(
-                "CONTINUE plans cannot contain turn-termination directives."
+                "CONTINUE plans may contain only outcome-unknown directives."
             )
         self.directives = MappingProxyType(directives)
 
@@ -102,9 +98,6 @@ class TurnRecoveryMiddleware(AgentMiddleware):
                     f"{tool_call_id}; refusing real tool execution."
                 )
             return await handler(request)
-        if directive.kind == RecoveryDirectiveKind.RETRY:
-            return await handler(request)
-
         return _synthetic_tool_message(request, directive)
 
     async def awrap_model_call(
@@ -146,67 +139,54 @@ def _synthetic_tool_message(
 ) -> ToolMessage:
     tool_name = request.tool_call["name"]
     termination_outcome: str | None = None
-    if directive.resolution_kind == "CONFIRM_SUCCEEDED":
-        content = (
-            f"Recovery-generated result for `{tool_name}`: the operation was "
-            "verified by the user as successful; no new tool execution occurred."
-        )
-        if directive.result_summary:
-            content += f" Verified result: {directive.result_summary}"
-        status = "success"
-    elif directive.resolution_kind == "CONFIRM_NOT_APPLIED":
-        content = (
-            f"Recovery-generated result for `{tool_name}`: the user verified "
-            "that the operation did not take effect; no retry was performed."
-        )
-        if directive.note:
-            content += f" Verification note: {directive.note}"
-        status = "error"
-    elif directive.resolution_kind == "RECORD_OUTCOME_UNKNOWN":
+    if directive.kind == RecoveryDirectiveKind.OUTCOME_UNKNOWN:
         content = (
             f"Recovery-generated result for `{tool_name}`: the external operation "
-            "may have succeeded or failed. No retry was performed."
+            "may have succeeded or failed before execution was interrupted. No "
+            "retry was performed during recovery. Do not infer success or failure "
+            "from this message. Verify external state with a read-only operation "
+            "when possible before proposing any new execution; if verification is "
+            "unavailable, report the uncertainty to the user."
         )
-        if directive.note:
-            content += f" Note: {directive.note}"
-        status = "error"
-    elif directive.resolution_kind == "CANCELLED_BY_TERMINATION":
+    elif directive.kind == RecoveryDirectiveKind.CANCELLED_BY_TERMINATION:
         content = (
             f"Recovery-generated result for `{tool_name}`: the user terminated "
             "the turn, so this pending call was cancelled. No new tool execution "
             "occurred during termination."
         )
-        status = "error"
         termination_outcome = "cancelled"
-    elif directive.resolution_kind == "OUTCOME_UNKNOWN_AT_TERMINATION":
+    elif directive.kind == RecoveryDirectiveKind.OUTCOME_UNKNOWN_AT_TERMINATION:
         content = (
             f"Recovery-generated result for `{tool_name}`: the user terminated "
             "the turn, but the earlier external operation may have succeeded or "
             "failed. It was not retried."
         )
-        status = "error"
         termination_outcome = "outcome_unknown"
     else:
         raise ValueError(
-            "Synthetic recovery directive has unsupported resolution kind: "
-            f"{directive.resolution_kind}"
+            "Synthetic recovery directive has unsupported kind: "
+            f"{directive.kind}"
         )
 
     recovery_metadata = {
         "generated": True,
-        "resolution_kind": directive.resolution_kind,
+        "kind": directive.kind.value,
     }
+    outcome = termination_outcome
+    if directive.kind == RecoveryDirectiveKind.OUTCOME_UNKNOWN:
+        outcome = "outcome_unknown"
+    if outcome is not None:
+        recovery_metadata["outcome"] = outcome
     if termination_outcome is not None:
         recovery_metadata.update(
             {
                 "action": "TERMINATE_TURN",
-                "outcome": termination_outcome,
             }
         )
 
     return ToolMessage(
         content=content,
         tool_call_id=request.tool_call["id"],
-        status=status,
+        status="error",
         additional_kwargs={"recovery": recovery_metadata},
     )

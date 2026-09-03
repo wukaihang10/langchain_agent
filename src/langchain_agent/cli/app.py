@@ -27,7 +27,6 @@ from langchain_agent.cli.commands import (
     select_session,
 )
 from langchain_agent.cli.hitl import collect_hitl_decisions
-from langchain_agent.cli.recovery import collect_tool_call_resolutions
 from langchain_agent.cli.rendering import (
     render_active_session,
     render_continuation,
@@ -204,20 +203,13 @@ async def run_cli(application: Application) -> None:
 
             if active_inspection.status == ContinuationStatus.WAITING_HUMAN:
                 decisions = tuple(collect_hitl_decisions(active_inspection.interrupts))
-                resolutions = ()
                 action = ContinuationAction.ANSWER_INTERRUPT
-            elif active_inspection.status == ContinuationStatus.RESUMABLE:
+            elif active_inspection.status in {
+                ContinuationStatus.RESUMABLE,
+                ContinuationStatus.OUTCOME_UNKNOWN,
+            }:
                 decisions = ()
-                resolutions = ()
                 action = ContinuationAction.CONTINUE
-            elif active_inspection.status == ContinuationStatus.OUTCOME_UNKNOWN:
-                decisions = ()
-                resolutions = tuple(
-                    collect_tool_call_resolutions(
-                        active_inspection.unresolved_tool_calls
-                    )
-                )
-                action = ContinuationAction.RESOLVE_AND_CONTINUE
             else:
                 render_continuation(active_inspection)
                 continue
@@ -230,7 +222,6 @@ async def run_cli(application: Application) -> None:
                         action=action,
                         observed_checkpoint_id=active_inspection.checkpoint_id,
                         decisions=decisions,
-                        resolutions=resolutions,
                     ),
                 )
             except ContinuationError as exc:

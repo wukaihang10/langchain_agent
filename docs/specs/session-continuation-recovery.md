@@ -1,11 +1,16 @@
 # Session Continuation Recovery
 
-Status: ready for implementation. Canonical tracker record:
+Status: implemented. Canonical tracker record:
 https://github.com/wukaihang10/langchain_agent/issues/1
 
-> Follow-up: issue #2 extends the `OUTCOME_UNKNOWN` baseline described here
-> with explicit `RESOLVE_AND_CONTINUE` recovery. Statements below that say
-> `OUTCOME_UNKNOWN` has no action describe issue #1's original scope.
+> Follow-ups: issue #2 originally extended `OUTCOME_UNKNOWN` with explicit
+> per-tool user resolutions, and issue #3 added safe turn termination. The
+> explicit resolution flow has since been superseded: `OUTCOME_UNKNOWN` now
+> accepts ordinary `CONTINUE`, which generates an auditable error `ToolMessage`
+> for every replay-unsafe call without executing it, then returns control to the
+> Agent. The Agent can verify external state, report uncertainty, or propose a
+> new call through the normal permission policy. Statements below that say
+> `OUTCOME_UNKNOWN` has no action describe issue #1's historical baseline.
 
 ## Problem Statement
 

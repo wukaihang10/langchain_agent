@@ -16,8 +16,6 @@ from langchain_agent.app.session_continuation import (
     ContinuationRequest,
     ContinuationStatus,
     SessionContinuation,
-    ToolCallResolution,
-    ToolCallResolutionKind,
 )
 from langchain_agent.app.context import AgentContext
 from langchain_agent.harness.middleware.turn_recovery import TurnRecoveryMiddleware
@@ -631,12 +629,12 @@ class DurableSessionContinuationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     inspection.allowed_actions,
                     {
-                        ContinuationAction.RESOLVE_AND_CONTINUE,
+                        ContinuationAction.CONTINUE,
                         ContinuationAction.TERMINATE_TURN,
                     },
                 )
 
-    async def test_confirmed_success_preserves_completed_sibling(self):
+    async def test_automatic_unknown_result_preserves_completed_sibling(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             checkpoint_path = root / "checkpoints.sqlite"
@@ -705,15 +703,8 @@ class DurableSessionContinuationTests(unittest.IsolatedAsyncioTestCase):
                 result = await continuation.execute(
                     active_runtime,
                     ContinuationRequest(
-                        action=ContinuationAction.RESOLVE_AND_CONTINUE,
+                        action=ContinuationAction.CONTINUE,
                         observed_checkpoint_id=inspection.checkpoint_id,
-                        resolutions=(
-                            ToolCallResolution(
-                                tool_call_id="unsafe-id",
-                                kind=ToolCallResolutionKind.CONFIRM_SUCCEEDED,
-                                result_summary="item id 42",
-                            ),
-                        ),
                     ),
                 )
 
@@ -726,12 +717,16 @@ class DurableSessionContinuationTests(unittest.IsolatedAsyncioTestCase):
                     if isinstance(message, ToolMessage)
                     and message.tool_call_id == "unsafe-id"
                 )
-                self.assertEqual(recovered.status, "success")
+                self.assertEqual(recovered.status, "error")
                 self.assertEqual(
-                    recovered.additional_kwargs["recovery"]["resolution_kind"],
-                    "CONFIRM_SUCCEEDED",
+                    recovered.additional_kwargs["recovery"],
+                    {
+                        "generated": True,
+                        "kind": "OUTCOME_UNKNOWN",
+                        "outcome": "outcome_unknown",
+                    },
                 )
-                self.assertIn("item id 42", recovered.content)
+                self.assertIn("Do not infer success or failure", recovered.content)
 
             async with open_checkpointer(checkpoint_path) as checkpointer:
                 final_agent = recovery_agent(checkpointer, [], [])
@@ -757,7 +752,8 @@ class DurableSessionContinuationTests(unittest.IsolatedAsyncioTestCase):
                     persisted_recovery.additional_kwargs["recovery"],
                     {
                         "generated": True,
-                        "resolution_kind": "CONFIRM_SUCCEEDED",
+                        "kind": "OUTCOME_UNKNOWN",
+                        "outcome": "outcome_unknown",
                     },
                 )
 
@@ -821,17 +817,8 @@ class DurableSessionContinuationTests(unittest.IsolatedAsyncioTestCase):
                 result = await continuation.execute(
                     active_runtime,
                     ContinuationRequest(
-                        action=ContinuationAction.RESOLVE_AND_CONTINUE,
+                        action=ContinuationAction.CONTINUE,
                         observed_checkpoint_id=inspection.checkpoint_id,
-                        resolutions=(
-                            ToolCallResolution(
-                                tool_call_id="unsafe-id",
-                                kind=(
-                                    ToolCallResolutionKind.RECORD_OUTCOME_UNKNOWN
-                                ),
-                                note="external state unavailable",
-                            ),
-                        ),
                     ),
                 )
 
@@ -974,7 +961,7 @@ class DurableSessionContinuationTests(unittest.IsolatedAsyncioTestCase):
                     "TERMINATE_TURN",
                 )
 
-    async def test_risky_retry_executes_only_failed_tool_once(self):
+    async def test_unsafe_call_is_not_retried_when_tool_becomes_available(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             checkpoint_path = root / "checkpoints.sqlite"
@@ -1033,28 +1020,26 @@ class DurableSessionContinuationTests(unittest.IsolatedAsyncioTestCase):
                 result = await continuation.execute(
                     active_runtime,
                     ContinuationRequest(
-                        action=ContinuationAction.RESOLVE_AND_CONTINUE,
+                        action=ContinuationAction.CONTINUE,
                         observed_checkpoint_id=inspection.checkpoint_id,
-                        resolutions=(
-                            ToolCallResolution(
-                                tool_call_id="unsafe-id",
-                                kind=ToolCallResolutionKind.RETRY_DESPITE_RISK,
-                            ),
-                        ),
                     ),
                 )
 
                 self.assertEqual(result.inspection.status, ContinuationStatus.READY)
                 self.assertEqual(TOOL_BEHAVIOR["completed_calls"], 1)
-                self.assertEqual(TOOL_BEHAVIOR["unsafe_calls"], 2)
-                retried = next(
+                self.assertEqual(TOOL_BEHAVIOR["unsafe_calls"], 1)
+                recovered = next(
                     message
                     for message in result.value["messages"]
                     if isinstance(message, ToolMessage)
                     and message.tool_call_id == "unsafe-id"
                 )
-                self.assertEqual(retried.content, "created item")
-                self.assertNotIn("recovery", retried.additional_kwargs)
+                self.assertEqual(recovered.status, "error")
+                self.assertIn("No retry was performed", recovered.content)
+                self.assertEqual(
+                    recovered.additional_kwargs["recovery"]["kind"],
+                    "OUTCOME_UNKNOWN",
+                )
 
     async def test_recovered_turn_can_enter_hitl_again_for_a_new_risky_call(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1126,14 +1111,8 @@ class DurableSessionContinuationTests(unittest.IsolatedAsyncioTestCase):
                 result = await continuation.execute(
                     active_runtime,
                     ContinuationRequest(
-                        action=ContinuationAction.RESOLVE_AND_CONTINUE,
+                        action=ContinuationAction.CONTINUE,
                         observed_checkpoint_id=inspection.checkpoint_id,
-                        resolutions=(
-                            ToolCallResolution(
-                                tool_call_id="unsafe-id",
-                                kind=ToolCallResolutionKind.CONFIRM_SUCCEEDED,
-                            ),
-                        ),
                     ),
                 )
 

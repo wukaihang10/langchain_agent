@@ -32,23 +32,7 @@ class ContinuationAction(StrEnum):
     START_TURN = "START_TURN"
     ANSWER_INTERRUPT = "ANSWER_INTERRUPT"
     CONTINUE = "CONTINUE"
-    RESOLVE_AND_CONTINUE = "RESOLVE_AND_CONTINUE"
     TERMINATE_TURN = "TERMINATE_TURN"
-
-
-class ToolCallResolutionKind(StrEnum):
-    CONFIRM_SUCCEEDED = "CONFIRM_SUCCEEDED"
-    CONFIRM_NOT_APPLIED = "CONFIRM_NOT_APPLIED"
-    RETRY_DESPITE_RISK = "RETRY_DESPITE_RISK"
-    RECORD_OUTCOME_UNKNOWN = "RECORD_OUTCOME_UNKNOWN"
-
-
-@dataclass(frozen=True)
-class ToolCallResolution:
-    tool_call_id: str
-    kind: ToolCallResolutionKind
-    result_summary: str | None = None
-    note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -64,7 +48,7 @@ class UnresolvedToolCall:
     args: Any
     replay_safe: bool
     policy_known: bool
-    resolution_required: bool = False
+    outcome_unknown: bool = False
 
 
 @dataclass(frozen=True)
@@ -84,7 +68,6 @@ class ContinuationRequest:
     observed_checkpoint_id: str | None
     message: str | None = None
     decisions: tuple[dict[str, Any], ...] = ()
-    resolutions: tuple[ToolCallResolution, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -119,7 +102,7 @@ _ALLOWED_ACTIONS = {
     ),
     ContinuationStatus.OUTCOME_UNKNOWN: frozenset(
         {
-            ContinuationAction.RESOLVE_AND_CONTINUE,
+            ContinuationAction.CONTINUE,
             ContinuationAction.TERMINATE_TURN,
         }
     ),
@@ -169,8 +152,11 @@ class SessionContinuation:
 
         input_value = self._build_input(latest, request)
         invocation_context = runtime.context
-        if request.action == ContinuationAction.RESOLVE_AND_CONTINUE:
-            recovery_plan = self._build_recovery_plan(latest, request)
+        if (
+            request.action == ContinuationAction.CONTINUE
+            and latest.status == ContinuationStatus.OUTCOME_UNKNOWN
+        ):
+            recovery_plan = self._build_outcome_unknown_plan(latest)
             invocation_context = replace(
                 runtime.context,
                 turn_recovery=recovery_plan,
@@ -180,10 +166,6 @@ class SessionContinuation:
             invocation_context = replace(
                 runtime.context,
                 turn_recovery=recovery_plan,
-            )
-        elif request.resolutions:
-            raise InvalidContinuationAction(
-                f"{request.action.value} does not accept tool-call resolutions."
             )
 
         # Touch only after both stale-state and action validation have succeeded,
@@ -228,14 +210,10 @@ class SessionContinuation:
             return Command(resume={"decisions": list(request.decisions)})
 
         if request.action == ContinuationAction.TERMINATE_TURN:
-            if (
-                request.message is not None
-                or request.decisions
-                or request.resolutions
-            ):
+            if request.message is not None or request.decisions:
                 raise InvalidContinuationAction(
-                    "TERMINATE_TURN does not accept a human message, HITL "
-                    "decisions, or tool-call resolutions."
+                    "TERMINATE_TURN does not accept a human message or HITL "
+                    "decisions."
                 )
             if inspection.interrupts:
                 decisions = _termination_hitl_decisions(inspection.interrupts)
@@ -248,67 +226,20 @@ class SessionContinuation:
 
         return None
 
-    def _build_recovery_plan(
+    def _build_outcome_unknown_plan(
         self,
         inspection: ContinuationInspection,
-        request: ContinuationRequest,
     ) -> TurnRecoveryPlan:
-        unsafe_calls = {
-            call.id: call
-            for call in inspection.unresolved_tool_calls
-            if call.resolution_required
-        }
-        supplied: dict[str, ToolCallResolution] = {}
-        for resolution in request.resolutions:
-            if not isinstance(resolution.kind, ToolCallResolutionKind):
-                raise InvalidContinuationAction(
-                    f"Tool call {resolution.tool_call_id} has an unsupported "
-                    f"resolution kind: {resolution.kind}."
-                )
-            if (
-                resolution.kind == ToolCallResolutionKind.CONFIRM_SUCCEEDED
-                and resolution.note is not None
-            ):
-                raise InvalidContinuationAction(
-                    "CONFIRM_SUCCEEDED accepts result_summary, not note."
-                )
-            if (
-                resolution.kind != ToolCallResolutionKind.CONFIRM_SUCCEEDED
-                and resolution.result_summary is not None
-            ):
-                raise InvalidContinuationAction(
-                    f"{resolution.kind.value} does not accept result_summary."
-                )
-            if (
-                resolution.kind == ToolCallResolutionKind.RETRY_DESPITE_RISK
-                and resolution.note is not None
-            ):
-                raise InvalidContinuationAction(
-                    "RETRY_DESPITE_RISK does not accept a note."
-                )
-            if resolution.tool_call_id in supplied:
-                raise InvalidContinuationAction(
-                    "Each uncertain tool call requires exactly one resolution; "
-                    f"{resolution.tool_call_id} was supplied more than once."
-                )
-            if resolution.tool_call_id not in unsafe_calls:
-                raise InvalidContinuationAction(
-                    f"Tool call {resolution.tool_call_id} is not an unresolved "
-                    "replay-unsafe call in the inspected checkpoint."
-                )
-            supplied[resolution.tool_call_id] = resolution
-
-        missing = [call_id for call_id in unsafe_calls if call_id not in supplied]
-        if missing:
-            raise InvalidContinuationAction(
-                "A resolution is required for every unresolved replay-unsafe "
-                f"tool call; missing: {', '.join(missing)}."
-            )
-
         directives = {
-            call_id: _to_recovery_directive(resolution)
-            for call_id, resolution in supplied.items()
+            call.id: ToolRecoveryDirective(RecoveryDirectiveKind.OUTCOME_UNKNOWN)
+            for call in inspection.unresolved_tool_calls
+            if call.outcome_unknown
         }
+        if not directives:
+            raise InvalidContinuationAction(
+                "OUTCOME_UNKNOWN continuation has no uncertain tool calls to "
+                "record. Inspect the latest checkpoint before continuing."
+            )
         return TurnRecoveryPlan(TurnRecoveryMode.CONTINUE, directives)
 
     def _build_termination_plan(
@@ -327,12 +258,11 @@ class SessionContinuation:
 
         directives = {
             call.id: ToolRecoveryDirective(
-                kind=RecoveryDirectiveKind.SYNTHETIC_ERROR,
-                resolution_kind=(
-                    "CANCELLED_BY_TERMINATION"
+                (
+                    RecoveryDirectiveKind.CANCELLED_BY_TERMINATION
                     if call.replay_safe
-                    else "OUTCOME_UNKNOWN_AT_TERMINATION"
-                ),
+                    else RecoveryDirectiveKind.OUTCOME_UNKNOWN_AT_TERMINATION
+                )
             )
             for call in inspection.unresolved_tool_calls
             if call.id not in protected_call_ids
@@ -428,7 +358,7 @@ class SessionContinuation:
         unresolved = tuple(
             replace(
                 call,
-                resolution_required=call.id in uncertain_ids,
+                outcome_unknown=call.id in uncertain_ids,
             )
             for call in unresolved
         )
@@ -443,8 +373,8 @@ class SessionContinuation:
                 unresolved=unresolved,
                 reason=(
                     "External outcome is unknown for pending tool call(s): "
-                    f"{names}. Verify external state before attempting repair or "
-                    "a risk-bearing retry."
+                    f"{names}. Continuing records an uncertain tool result without "
+                    "replaying these calls, then returns control to the Agent."
                 ),
             )
 
@@ -748,24 +678,3 @@ def _termination_hitl_decisions(
             if isinstance(action, Mapping)
         )
     return decisions
-
-
-def _to_recovery_directive(
-    resolution: ToolCallResolution,
-) -> ToolRecoveryDirective:
-    if resolution.kind == ToolCallResolutionKind.CONFIRM_SUCCEEDED:
-        kind = RecoveryDirectiveKind.SYNTHETIC_SUCCESS
-    elif resolution.kind in {
-        ToolCallResolutionKind.CONFIRM_NOT_APPLIED,
-        ToolCallResolutionKind.RECORD_OUTCOME_UNKNOWN,
-    }:
-        kind = RecoveryDirectiveKind.SYNTHETIC_ERROR
-    else:
-        kind = RecoveryDirectiveKind.RETRY
-
-    return ToolRecoveryDirective(
-        kind=kind,
-        resolution_kind=resolution.kind.value,
-        result_summary=resolution.result_summary,
-        note=resolution.note,
-    )
