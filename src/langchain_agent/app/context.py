@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from langchain_agent.harness.middleware.tool_recovery import ToolRecoveryPlan
 from langchain_agent.harness.permissions.models import PermissionMode
 from langchain_agent.repository_knowledge import RepositoryKnowledgeService
 
@@ -9,3 +10,4 @@ class AgentContext:
     repository_path: str
     repository_knowledge: RepositoryKnowledgeService
     permission_mode: PermissionMode = PermissionMode.DEFAULT
+    tool_recovery: ToolRecoveryPlan | None = None

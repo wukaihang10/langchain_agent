@@ -28,9 +28,6 @@ def build_native_tool_policies(
     policies: dict[str, ToolPolicy] = {}
 
     for tool in tools:
-        if tool.name == "write_todos":
-            continue
-
         metadata = tool.metadata or {}
 
         try:
