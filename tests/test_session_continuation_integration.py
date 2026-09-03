@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langchain.agents.middleware import AgentMiddleware, HumanInTheLoopMiddleware
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
@@ -20,7 +20,7 @@ from langchain_agent.app.session_continuation import (
     ToolCallResolutionKind,
 )
 from langchain_agent.app.context import AgentContext
-from langchain_agent.harness.middleware.tool_recovery import ToolRecoveryMiddleware
+from langchain_agent.harness.middleware.turn_recovery import TurnRecoveryMiddleware
 from langchain_agent.harness.permissions.models import (
     ToolCategory,
     ToolPolicy,
@@ -45,6 +45,7 @@ SAFE_POLICY = ToolPolicy(
 )
 
 TOOL_BEHAVIOR = {
+    "write_calls": 0,
     "completed_calls": 0,
     "safe_calls": 0,
     "unsafe_calls": 0,
@@ -58,10 +59,39 @@ class ToolCallingFakeModel(FakeMessagesListChatModel):
         return self
 
 
+class CountingToolCallingFakeModel(ToolCallingFakeModel):
+    calls: int = 0
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        self.calls += 1
+        return super()._generate(messages, stop, run_manager, **kwargs)
+
+
+class FailingToolCallingFakeModel(ToolCallingFakeModel):
+    calls: int = 0
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        self.calls += 1
+        raise ConnectionError("model disconnected")
+
+
+class LifecycleProbeMiddleware(AgentMiddleware):
+    def __init__(self):
+        self.after_model_calls = 0
+        self.after_agent_calls = 0
+
+    def after_model(self, state, runtime):
+        self.after_model_calls += 1
+
+    def after_agent(self, state, runtime):
+        self.after_agent_calls += 1
+
+
 @tool
 def write_note(path: str) -> str:
     """Write a test note."""
 
+    TOOL_BEHAVIOR["write_calls"] += 1
     return f"wrote {path}"
 
 
@@ -192,7 +222,7 @@ def recovery_agent(checkpointer, responses, tools):
     return create_agent(
         model=ToolCallingFakeModel(responses=responses),
         tools=tools,
-        middleware=[ToolRecoveryMiddleware()],
+        middleware=[TurnRecoveryMiddleware()],
         context_schema=AgentContext,
         checkpointer=checkpointer,
     )
@@ -220,6 +250,7 @@ def runtime(session):
 class DurableSessionContinuationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         TOOL_BEHAVIOR.update(
+            write_calls=0,
             completed_calls=0,
             safe_calls=0,
             unsafe_calls=0,
@@ -287,6 +318,188 @@ class DurableSessionContinuationTests(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(result.inspection.status, ContinuationStatus.READY)
 
+    async def test_hitl_turn_can_be_terminated_after_sqlite_reopens(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoint_path = root / "checkpoints.sqlite"
+            store = SessionStore(root / "sessions.json")
+            session = store.create(name="terminate-hitl", repository_path=str(root))
+            config = {"configurable": {"thread_id": session.thread_id}}
+            tool_call = AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": write_note.name,
+                        "args": {"path": "notes.txt"},
+                        "id": "call-1",
+                        "type": "tool_call",
+                    },
+                    {
+                        "name": write_note.name,
+                        "args": {"path": "other.txt"},
+                        "id": "call-2",
+                        "type": "tool_call",
+                    },
+                ],
+            )
+
+            async with open_checkpointer(checkpoint_path) as checkpointer:
+                agent = create_agent(
+                    model=ToolCallingFakeModel(responses=[tool_call]),
+                    tools=[write_note],
+                    middleware=[
+                        TurnRecoveryMiddleware(),
+                        HumanInTheLoopMiddleware(
+                            interrupt_on={write_note.name: True}
+                        ),
+                    ],
+                    context_schema=AgentContext,
+                    checkpointer=checkpointer,
+                )
+                await agent.ainvoke(
+                    {"messages": [HumanMessage(content="write notes")]},
+                    config=config,
+                    context=agent_runtime(session, root).context,
+                )
+
+            async with open_checkpointer(checkpoint_path) as checkpointer:
+                model = CountingToolCallingFakeModel(
+                    responses=[AIMessage(content="fresh turn response")]
+                )
+                agent = create_agent(
+                    model=model,
+                    tools=[write_note],
+                    middleware=[
+                        TurnRecoveryMiddleware(),
+                        HumanInTheLoopMiddleware(
+                            interrupt_on={write_note.name: True}
+                        ),
+                    ],
+                    context_schema=AgentContext,
+                    checkpointer=checkpointer,
+                )
+                continuation = SessionContinuation(
+                    agent=agent,
+                    policy_registry=ToolPolicyRegistry(
+                        {write_note.name: UNSAFE_POLICY}
+                    ),
+                    session_store=store,
+                )
+                active_runtime = agent_runtime(session, root)
+                inspection = await continuation.inspect(active_runtime)
+
+                result = await continuation.execute(
+                    active_runtime,
+                    ContinuationRequest(
+                        action=ContinuationAction.TERMINATE_TURN,
+                        observed_checkpoint_id=inspection.checkpoint_id,
+                    ),
+                )
+
+                self.assertEqual(result.inspection.status, ContinuationStatus.READY)
+                self.assertEqual(TOOL_BEHAVIOR["write_calls"], 0)
+                self.assertEqual(model.calls, 0)
+                tool_results = {
+                    message.tool_call_id: message
+                    for message in result.value["messages"]
+                    if isinstance(message, ToolMessage)
+                    and message.tool_call_id in {"call-1", "call-2"}
+                }
+                self.assertEqual(set(tool_results), {"call-1", "call-2"})
+                self.assertTrue(
+                    all(message.status == "error" for message in tool_results.values())
+                )
+                terminal = result.value["messages"][-1]
+                self.assertIsInstance(terminal, AIMessage)
+                self.assertFalse(terminal.tool_calls)
+                self.assertEqual(
+                    terminal.additional_kwargs["recovery"]["action"],
+                    "TERMINATE_TURN",
+                )
+
+                next_result = await continuation.execute(
+                    active_runtime,
+                    ContinuationRequest(
+                        action=ContinuationAction.START_TURN,
+                        observed_checkpoint_id=result.inspection.checkpoint_id,
+                        message="start something new",
+                    ),
+                )
+                self.assertEqual(
+                    next_result.inspection.status,
+                    ContinuationStatus.READY,
+                )
+                self.assertEqual(
+                    next_result.value["messages"][-1].content,
+                    "fresh turn response",
+                )
+                self.assertEqual(model.calls, 1)
+
+    async def test_pending_model_termination_uses_normal_completion_hooks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoint_path = root / "checkpoints.sqlite"
+            store = SessionStore(root / "sessions.json")
+            session = store.create(name="terminate-model", repository_path=str(root))
+            config = {"configurable": {"thread_id": session.thread_id}}
+
+            async with open_checkpointer(checkpoint_path) as checkpointer:
+                agent = create_agent(
+                    model=FailingToolCallingFakeModel(
+                        responses=[AIMessage(content="unused")]
+                    ),
+                    tools=[],
+                    middleware=[TurnRecoveryMiddleware()],
+                    context_schema=AgentContext,
+                    checkpointer=checkpointer,
+                )
+                with self.assertRaisesRegex(ConnectionError, "model disconnected"):
+                    await agent.ainvoke(
+                        {"messages": [HumanMessage(content="do work")]},
+                        config=config,
+                        context=agent_runtime(session, root).context,
+                    )
+
+            async with open_checkpointer(checkpoint_path) as checkpointer:
+                model = CountingToolCallingFakeModel(
+                    responses=[AIMessage(content="must not run")]
+                )
+                probe = LifecycleProbeMiddleware()
+                agent = create_agent(
+                    model=model,
+                    tools=[],
+                    middleware=[TurnRecoveryMiddleware(), probe],
+                    context_schema=AgentContext,
+                    checkpointer=checkpointer,
+                )
+                continuation = SessionContinuation(
+                    agent=agent,
+                    policy_registry=ToolPolicyRegistry(),
+                    session_store=store,
+                )
+                active_runtime = agent_runtime(session, root)
+                inspection = await continuation.inspect(active_runtime)
+                self.assertEqual(inspection.status, ContinuationStatus.RESUMABLE)
+
+                result = await continuation.execute(
+                    active_runtime,
+                    ContinuationRequest(
+                        action=ContinuationAction.TERMINATE_TURN,
+                        observed_checkpoint_id=inspection.checkpoint_id,
+                    ),
+                )
+
+                self.assertEqual(result.inspection.status, ContinuationStatus.READY)
+                self.assertEqual(model.calls, 0)
+                self.assertEqual(probe.after_model_calls, 1)
+                self.assertEqual(probe.after_agent_calls, 1)
+                self.assertEqual(
+                    result.value["messages"][-1].additional_kwargs["recovery"][
+                        "action"
+                    ],
+                    "TERMINATE_TURN",
+                )
+
     async def test_hitl_interrupt_survives_reopening_sqlite_and_can_be_answered(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -319,7 +532,10 @@ class DurableSessionContinuationTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(
                     inspection.allowed_actions,
-                    {ContinuationAction.ANSWER_INTERRUPT},
+                    {
+                        ContinuationAction.ANSWER_INTERRUPT,
+                        ContinuationAction.TERMINATE_TURN,
+                    },
                 )
 
                 result = await continuation.execute(
@@ -365,7 +581,10 @@ class DurableSessionContinuationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(inspection.status, ContinuationStatus.RESUMABLE)
                 self.assertEqual(
                     inspection.allowed_actions,
-                    {ContinuationAction.CONTINUE},
+                    {
+                        ContinuationAction.CONTINUE,
+                        ContinuationAction.TERMINATE_TURN,
+                    },
                 )
 
                 result = await continuation.execute(
@@ -411,7 +630,10 @@ class DurableSessionContinuationTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(
                     inspection.allowed_actions,
-                    {ContinuationAction.RESOLVE_AND_CONTINUE},
+                    {
+                        ContinuationAction.RESOLVE_AND_CONTINUE,
+                        ContinuationAction.TERMINATE_TURN,
+                    },
                 )
 
     async def test_confirmed_success_preserves_completed_sibling(self):
@@ -625,6 +847,133 @@ class DurableSessionContinuationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(unknown.status, "error")
                 self.assertIn("No retry was performed", unknown.content)
 
+    async def test_mixed_failed_tools_are_terminated_without_reexecution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoint_path = root / "checkpoints.sqlite"
+            store = SessionStore(root / "sessions.json")
+            session = store.create(name="terminate-mixed", repository_path=str(root))
+            run_config = {"configurable": {"thread_id": session.thread_id}}
+            TOOL_BEHAVIOR["fail_safe"] = True
+            TOOL_BEHAVIOR["fail_unsafe"] = True
+            tool_calls = AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": completed_lookup.name,
+                        "args": {"query": "zero"},
+                        "id": "completed-id",
+                    },
+                    {
+                        "name": recoverable_lookup.name,
+                        "args": {"query": "one"},
+                        "id": "safe-id",
+                    },
+                    {
+                        "name": uncertain_create.name,
+                        "args": {"name": "item"},
+                        "id": "unsafe-id",
+                    },
+                ],
+            )
+
+            async with open_checkpointer(checkpoint_path) as checkpointer:
+                agent = recovery_agent(
+                    checkpointer,
+                    [tool_calls],
+                    [completed_lookup, recoverable_lookup, uncertain_create],
+                )
+                with self.assertRaises(Exception):
+                    await agent.ainvoke(
+                        {"messages": [HumanMessage(content="run both")]},
+                        config=run_config,
+                        context=agent_runtime(session, root).context,
+                    )
+
+            safe_calls = TOOL_BEHAVIOR["safe_calls"]
+            unsafe_calls = TOOL_BEHAVIOR["unsafe_calls"]
+            completed_calls = TOOL_BEHAVIOR["completed_calls"]
+            async with open_checkpointer(checkpoint_path) as checkpointer:
+                model = CountingToolCallingFakeModel(
+                    responses=[AIMessage(content="must not run")]
+                )
+                agent = create_agent(
+                    model=model,
+                    tools=[completed_lookup, recoverable_lookup, uncertain_create],
+                    middleware=[TurnRecoveryMiddleware()],
+                    context_schema=AgentContext,
+                    checkpointer=checkpointer,
+                )
+                continuation = SessionContinuation(
+                    agent=agent,
+                    policy_registry=ToolPolicyRegistry(
+                        {
+                            completed_lookup.name: SAFE_POLICY,
+                            recoverable_lookup.name: SAFE_POLICY,
+                            uncertain_create.name: UNSAFE_POLICY,
+                        }
+                    ),
+                    session_store=store,
+                )
+                active_runtime = agent_runtime(session, root)
+                inspection = await continuation.inspect(active_runtime)
+                result = await continuation.execute(
+                    active_runtime,
+                    ContinuationRequest(
+                        action=ContinuationAction.TERMINATE_TURN,
+                        observed_checkpoint_id=inspection.checkpoint_id,
+                    ),
+                )
+
+                self.assertEqual(result.inspection.status, ContinuationStatus.READY)
+                self.assertEqual(TOOL_BEHAVIOR["safe_calls"], safe_calls)
+                self.assertEqual(TOOL_BEHAVIOR["unsafe_calls"], unsafe_calls)
+                self.assertEqual(
+                    TOOL_BEHAVIOR["completed_calls"],
+                    completed_calls,
+                )
+                self.assertEqual(model.calls, 0)
+                recovered = {
+                    message.tool_call_id: message
+                    for message in result.value["messages"]
+                    if isinstance(message, ToolMessage)
+                    and message.tool_call_id in {"safe-id", "unsafe-id"}
+                }
+                self.assertEqual(set(recovered), {"safe-id", "unsafe-id"})
+                completed = next(
+                    message
+                    for message in result.value["messages"]
+                    if isinstance(message, ToolMessage)
+                    and message.tool_call_id == "completed-id"
+                )
+                self.assertEqual(completed.content, "completed zero")
+                self.assertNotIn("recovery", completed.additional_kwargs)
+                self.assertEqual(
+                    recovered["safe-id"].additional_kwargs["recovery"]["outcome"],
+                    "cancelled",
+                )
+                self.assertEqual(
+                    recovered["unsafe-id"].additional_kwargs["recovery"]["outcome"],
+                    "outcome_unknown",
+                )
+                self.assertEqual(
+                    result.value["messages"][-1].additional_kwargs["recovery"][
+                        "action"
+                    ],
+                    "TERMINATE_TURN",
+                )
+
+            async with open_checkpointer(checkpoint_path) as checkpointer:
+                final_agent = recovery_agent(checkpointer, [], [])
+                final = await final_agent.aget_state(run_config)
+                self.assertFalse(final.next)
+                self.assertEqual(
+                    final.values["messages"][-1].additional_kwargs["recovery"][
+                        "action"
+                    ],
+                    "TERMINATE_TURN",
+                )
+
     async def test_risky_retry_executes_only_failed_tool_once(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -754,7 +1103,7 @@ class DurableSessionContinuationTests(unittest.IsolatedAsyncioTestCase):
                     model=ToolCallingFakeModel(responses=[next_risky_call]),
                     tools=[uncertain_create, write_note],
                     middleware=[
-                        ToolRecoveryMiddleware(),
+                        TurnRecoveryMiddleware(),
                         HumanInTheLoopMiddleware(
                             interrupt_on={write_note.name: True}
                         ),
@@ -794,7 +1143,10 @@ class DurableSessionContinuationTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(
                     result.inspection.allowed_actions,
-                    {ContinuationAction.ANSWER_INTERRUPT},
+                    {
+                        ContinuationAction.ANSWER_INTERRUPT,
+                        ContinuationAction.TERMINATE_TURN,
+                    },
                 )
                 self.assertEqual(
                     result.inspection.interrupts[0].value["action_requests"][0][

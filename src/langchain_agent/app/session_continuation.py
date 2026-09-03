@@ -9,10 +9,11 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
 
 from langchain_agent.app.session_runtime import SessionRuntime
-from langchain_agent.harness.middleware.tool_recovery import (
+from langchain_agent.harness.middleware.turn_recovery import (
     RecoveryDirectiveKind,
+    TurnRecoveryMode,
+    TurnRecoveryPlan,
     ToolRecoveryDirective,
-    ToolRecoveryPlan,
 )
 from langchain_agent.harness.permissions.registry import ToolPolicyRegistry
 from langchain_agent.persistence.sessions import SessionStore
@@ -32,6 +33,7 @@ class ContinuationAction(StrEnum):
     ANSWER_INTERRUPT = "ANSWER_INTERRUPT"
     CONTINUE = "CONTINUE"
     RESOLVE_AND_CONTINUE = "RESOLVE_AND_CONTINUE"
+    TERMINATE_TURN = "TERMINATE_TURN"
 
 
 class ToolCallResolutionKind(StrEnum):
@@ -106,10 +108,20 @@ class InvalidContinuationAction(ContinuationError):
 _ALLOWED_ACTIONS = {
     ContinuationStatus.EMPTY: frozenset({ContinuationAction.START_TURN}),
     ContinuationStatus.READY: frozenset({ContinuationAction.START_TURN}),
-    ContinuationStatus.WAITING_HUMAN: frozenset({ContinuationAction.ANSWER_INTERRUPT}),
-    ContinuationStatus.RESUMABLE: frozenset({ContinuationAction.CONTINUE}),
+    ContinuationStatus.WAITING_HUMAN: frozenset(
+        {
+            ContinuationAction.ANSWER_INTERRUPT,
+            ContinuationAction.TERMINATE_TURN,
+        }
+    ),
+    ContinuationStatus.RESUMABLE: frozenset(
+        {ContinuationAction.CONTINUE, ContinuationAction.TERMINATE_TURN}
+    ),
     ContinuationStatus.OUTCOME_UNKNOWN: frozenset(
-        {ContinuationAction.RESOLVE_AND_CONTINUE}
+        {
+            ContinuationAction.RESOLVE_AND_CONTINUE,
+            ContinuationAction.TERMINATE_TURN,
+        }
     ),
     ContinuationStatus.NEEDS_REPAIR: frozenset(),
 }
@@ -155,13 +167,19 @@ class SessionContinuation:
                 f"{latest.status.value}: {latest.reason}"
             )
 
-        input_value = self._build_input(request)
+        input_value = self._build_input(latest, request)
         invocation_context = runtime.context
         if request.action == ContinuationAction.RESOLVE_AND_CONTINUE:
             recovery_plan = self._build_recovery_plan(latest, request)
             invocation_context = replace(
                 runtime.context,
-                tool_recovery=recovery_plan,
+                turn_recovery=recovery_plan,
+            )
+        elif request.action == ContinuationAction.TERMINATE_TURN:
+            recovery_plan = self._build_termination_plan(latest)
+            invocation_context = replace(
+                runtime.context,
+                turn_recovery=recovery_plan,
             )
         elif request.resolutions:
             raise InvalidContinuationAction(
@@ -181,7 +199,11 @@ class SessionContinuation:
             inspection=await self.inspect(runtime),
         )
 
-    def _build_input(self, request: ContinuationRequest) -> Any:
+    def _build_input(
+        self,
+        inspection: ContinuationInspection,
+        request: ContinuationRequest,
+    ) -> Any:
         if request.action == ContinuationAction.START_TURN:
             if request.message is None or not request.message.strip():
                 raise InvalidContinuationAction(
@@ -205,13 +227,32 @@ class SessionContinuation:
 
             return Command(resume={"decisions": list(request.decisions)})
 
+        if request.action == ContinuationAction.TERMINATE_TURN:
+            if (
+                request.message is not None
+                or request.decisions
+                or request.resolutions
+            ):
+                raise InvalidContinuationAction(
+                    "TERMINATE_TURN does not accept a human message, HITL "
+                    "decisions, or tool-call resolutions."
+                )
+            if inspection.interrupts:
+                decisions = _termination_hitl_decisions(inspection.interrupts)
+                if not decisions:
+                    raise InvalidContinuationAction(
+                        "TERMINATE_TURN cannot resume a human interrupt that has "
+                        "no HITL action requests."
+                    )
+                return Command(resume={"decisions": decisions})
+
         return None
 
     def _build_recovery_plan(
         self,
         inspection: ContinuationInspection,
         request: ContinuationRequest,
-    ) -> ToolRecoveryPlan:
+    ) -> TurnRecoveryPlan:
         unsafe_calls = {
             call.id: call
             for call in inspection.unresolved_tool_calls
@@ -268,7 +309,35 @@ class SessionContinuation:
             call_id: _to_recovery_directive(resolution)
             for call_id, resolution in supplied.items()
         }
-        return ToolRecoveryPlan(directives)
+        return TurnRecoveryPlan(TurnRecoveryMode.CONTINUE, directives)
+
+    def _build_termination_plan(
+        self,
+        inspection: ContinuationInspection,
+    ) -> TurnRecoveryPlan:
+        protected_call_ids, errors = _match_hitl_calls(
+            inspection.interrupts,
+            inspection.unresolved_tool_calls,
+        )
+        if errors:
+            raise InvalidContinuationAction(
+                "TERMINATE_TURN cannot safely match the pending HITL requests: "
+                f"{errors[0]}"
+            )
+
+        directives = {
+            call.id: ToolRecoveryDirective(
+                kind=RecoveryDirectiveKind.SYNTHETIC_ERROR,
+                resolution_kind=(
+                    "CANCELLED_BY_TERMINATION"
+                    if call.replay_safe
+                    else "OUTCOME_UNKNOWN_AT_TERMINATION"
+                ),
+            )
+            for call in inspection.unresolved_tool_calls
+            if call.id not in protected_call_ids
+        }
+        return TurnRecoveryPlan(TurnRecoveryMode.TERMINATE, directives)
 
     def _classify(self, snapshot: Any) -> ContinuationInspection:
         if snapshot is None:
@@ -348,7 +417,7 @@ class SessionContinuation:
             (getattr(snapshot, "next", ()) or ()) or pending_task_ids
         )
         # LangChain create_agent dispatches tool calls through the "tools" node.
-        # A pending model node cannot consume ToolRecoveryMiddleware directives.
+        # A pending model node cannot consume tool-call recovery directives.
         has_tool_continuation_path = "tools" in pending_nodes
         uncertain = [
             call
@@ -657,6 +726,28 @@ def _match_hitl_calls(
                 matched.add(match.id)
 
     return matched, errors
+
+
+def _termination_hitl_decisions(
+    interrupts: tuple[PendingInterrupt, ...],
+) -> list[dict[str, str]]:
+    decisions: list[dict[str, str]] = []
+    for interrupt_item in interrupts:
+        value = interrupt_item.value
+        if not isinstance(value, Mapping):
+            continue
+        action_requests = value.get("action_requests", ())
+        if not isinstance(action_requests, Sequence):
+            continue
+        decisions.extend(
+            {
+                "type": "reject",
+                "message": "User terminated the turn.",
+            }
+            for action in action_requests
+            if isinstance(action, Mapping)
+        )
+    return decisions
 
 
 def _to_recovery_directive(
