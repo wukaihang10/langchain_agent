@@ -289,6 +289,42 @@ class SessionContinuation:
         has_material_state = bool(
             messages or pending_nodes or interrupts or getattr(snapshot, "values", {})
         )
+
+        interrupt_call_ids, interrupt_errors = _match_hitl_calls(
+            interrupts,
+            unresolved,
+        )
+
+        unprotected = [call for call in unresolved if call.id not in interrupt_call_ids]
+
+        has_continuation_path = bool(
+            (getattr(snapshot, "next", ()) or ()) or pending_task_ids
+        )
+        has_tool_continuation_path = (
+            "tools" in pending_nodes
+            or "HumanInTheLoopMiddleware.after_model" in pending_nodes
+        )  # when a tool needs approval, it will be passed to 'HumanInTheLoopMiddleware.after_model' before 'tools'
+
+        uncertain = [call for call in unprotected if not call.replay_safe]
+        uncertain_ids = {call.id for call in uncertain}
+        unresolved = tuple(
+            replace(
+                call,
+                outcome_unknown=call.id in uncertain_ids,
+            )
+            for call in unresolved
+        )
+
+        runtime_errors = []
+        if unresolved and not has_tool_continuation_path:
+            ids = ", ".join(call.id for call in unresolved)
+
+            runtime_errors = [
+                f"Tool call(s) have no matching result and no pending tool execution path: {ids}. The history requires explicit repair."
+            ]
+
+        structural_errors = [*protocol_errors, *interrupt_errors, *runtime_errors]
+
         if checkpoint_id is None and not has_material_state:
             return _inspection(
                 status=ContinuationStatus.EMPTY,
@@ -309,22 +345,10 @@ class SessionContinuation:
                 ),
             )
 
-        interrupt_call_ids, interrupt_errors = _match_hitl_calls(
-            interrupts,
-            unresolved,
-        )
-        structural_errors = [*protocol_errors, *interrupt_errors]
-        unprotected = [call for call in unresolved if call.id not in interrupt_call_ids]
-
         if structural_errors:
-            unknown_outcome_calls = [
-                call for call in unprotected if not call.replay_safe
-            ]
             uncertainty_warning = ""
-            if unknown_outcome_calls:
-                names = ", ".join(
-                    f"{call.name} ({call.id})" for call in unknown_outcome_calls
-                )
+            if uncertain:
+                names = ", ".join(f"{call.name} ({call.id})" for call in uncertain)
                 uncertainty_warning = (
                     " External outcome may be unknown for unresolved tool call(s): "
                     f"{names}. Verify external state before any future repair."
@@ -342,26 +366,6 @@ class SessionContinuation:
                     f"{uncertainty_warning}"
                 ),
             )
-
-        has_continuation_path = bool(
-            (getattr(snapshot, "next", ()) or ()) or pending_task_ids
-        )
-        # LangChain create_agent dispatches tool calls through the "tools" node.
-        # A pending model node cannot consume tool-call recovery directives.
-        has_tool_continuation_path = "tools" in pending_nodes
-        uncertain = [
-            call
-            for call in unprotected
-            if has_tool_continuation_path and not call.replay_safe
-        ]
-        uncertain_ids = {call.id for call in uncertain}
-        unresolved = tuple(
-            replace(
-                call,
-                outcome_unknown=call.id in uncertain_ids,
-            )
-            for call in unresolved
-        )
 
         if uncertain:
             names = ", ".join(f"{call.name} ({call.id})" for call in uncertain)
@@ -388,27 +392,6 @@ class SessionContinuation:
                 reason=(
                     "The graph is waiting for a persisted human decision. Review "
                     "the original request before answering the interrupt."
-                ),
-            )
-
-        if unresolved and not has_tool_continuation_path:
-            ids = ", ".join(call.id for call in unresolved)
-            uncertainty_warning = (
-                " The external outcome may be unknown for one or more calls; "
-                "ordinary continuation is still blocked because no pending tool "
-                "execution path exists."
-                if any(not call.replay_safe for call in unresolved)
-                else ""
-            )
-            return _inspection(
-                status=ContinuationStatus.NEEDS_REPAIR,
-                checkpoint_id=checkpoint_id,
-                pending_nodes=pending_nodes,
-                unresolved=unresolved,
-                reason=(
-                    "Tool call(s) have no matching result and no pending tool "
-                    f"execution path: {ids}. The history requires explicit repair."
-                    f"{uncertainty_warning}"
                 ),
             )
 
