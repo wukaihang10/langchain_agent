@@ -1,9 +1,12 @@
 from collections.abc import Mapping, Sequence
-
 from langchain_core.tools import BaseTool
 
 from langchain_agent.app.context import AgentContext
-from langchain_agent.app.session_continuation import ContinuationInspection
+from langchain_agent.app.session_continuation import (
+    ContinuationInspection,
+    StopOutcome,
+    StopResult,
+)
 from langchain_agent.persistence.sessions import Session
 
 
@@ -14,12 +17,25 @@ def render_mcp_tools(tools: Sequence[BaseTool]) -> None:
         print(f"- {tool.name}")
 
 
-def render_result(result: dict) -> None:
+def render_result(result: dict | None) -> None:
+    if result is None:
+        return
     messages = result["messages"]
 
     if messages:
         print("\n--- Agent ---")
         print(messages[-1].content)
+
+
+def render_stop_result(result: StopResult) -> None:
+    if result.outcome == StopOutcome.STOPPED:
+        print("Active turn stopped safely.")
+    elif result.outcome == StopOutcome.COMPLETED_BEFORE_STOP:
+        print("The turn completed before cancellation took effect.")
+    elif result.outcome == StopOutcome.NOT_RUNNING:
+        print("No active turn is running.")
+    else:
+        print("The active turn stopped, but its latest checkpoint needs repair.")
 
 
 def render_sessions(
@@ -140,6 +156,7 @@ def render_help() -> None:
         "  /new     Create a new session\n"
         "  /resume  Resume an existing session\n"
         "  /continue Continue pending work or answer an interrupt\n"
+        "  /stop    Stop the currently running turn\n"
         "  /terminate Terminate the unfinished turn without continuing it\n"
         "  /rename  Rename the active session\n"
         "  /delete  Delete a session\n"

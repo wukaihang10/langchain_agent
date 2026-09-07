@@ -1,3 +1,4 @@
+import asyncio
 import io
 import unittest
 from types import SimpleNamespace
@@ -9,6 +10,8 @@ from langchain_agent.app.session_continuation import (
     ContinuationResult,
     ContinuationStatus,
     PendingInterrupt,
+    StopOutcome,
+    StopResult,
     UnresolvedToolCall,
 )
 from langchain_agent.cli.app import _execute_with_live_hitl, run_cli
@@ -197,7 +200,9 @@ class LiveHitlRoutingTests(unittest.IsolatedAsyncioTestCase):
         session = SimpleNamespace(thread_id="thread-1", name="test")
         runtime = SimpleNamespace(session=session, context=object())
         prompt_session = SimpleNamespace(
-            prompt_async=AsyncMock(side_effect=["/new", "/continue", "/exit"])
+            prompt_async=AsyncMock(
+                side_effect=["/new", "/continue", "stale prompt", "/exit"]
+            )
         )
 
         with (
@@ -248,7 +253,9 @@ class LiveHitlRoutingTests(unittest.IsolatedAsyncioTestCase):
         session = SimpleNamespace(thread_id="thread-1", name="test")
         runtime = SimpleNamespace(session=session, context=object())
         prompt_session = SimpleNamespace(
-            prompt_async=AsyncMock(side_effect=["/new", "/terminate", "/exit"])
+            prompt_async=AsyncMock(
+                side_effect=["/new", "/terminate", "stale prompt", "/exit"]
+            )
         )
 
         with (
@@ -275,6 +282,98 @@ class LiveHitlRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(request.message)
         self.assertFalse(request.decisions)
         collect_hitl.assert_not_called()
+
+
+class RunningTurnPromptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_agent_completion_cancels_and_awaits_running_prompt(self):
+        ready = inspection(ContinuationStatus.READY, checkpoint_id="checkpoint-2")
+        execute_started = asyncio.Event()
+        finish_execution = asyncio.Event()
+        prompt_started = asyncio.Event()
+        prompt_cancelled = asyncio.Event()
+
+        async def execute(runtime, request):
+            execute_started.set()
+            await finish_execution.wait()
+            return ContinuationResult(
+                value={"messages": [SimpleNamespace(content="done")]},
+                inspection=ready,
+            )
+
+        async def prompt_async(prompt):
+            prompt_started.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                prompt_cancelled.set()
+                raise
+
+        application = SimpleNamespace(
+            continuation=SimpleNamespace(execute=execute),
+        )
+        runtime = SimpleNamespace(session=SimpleNamespace(thread_id="thread-1"))
+        prompt_session = SimpleNamespace(prompt_async=prompt_async)
+
+        running = asyncio.create_task(
+            _execute_with_live_hitl(
+                application=application,
+                runtime=runtime,
+                request=SimpleNamespace(action=ContinuationAction.START_TURN),
+                prompt_session=prompt_session,
+            )
+        )
+        await asyncio.gather(execute_started.wait(), prompt_started.wait())
+        finish_execution.set()
+        value, final_inspection = await running
+
+        self.assertEqual(value["messages"][-1].content, "done")
+        self.assertEqual(final_inspection.status, ContinuationStatus.READY)
+        self.assertTrue(prompt_cancelled.is_set())
+
+    async def test_running_prompt_routes_only_stop_and_never_queues_text(self):
+        ready = inspection(ContinuationStatus.READY, checkpoint_id="checkpoint-2")
+        stop_called = asyncio.Event()
+        stop_calls = []
+
+        async def execute(runtime, request):
+            await stop_called.wait()
+            return ContinuationResult(
+                value={"messages": [SimpleNamespace(content="terminated")]},
+                inspection=ready,
+            )
+
+        async def stop(thread_id):
+            stop_calls.append(thread_id)
+            stop_called.set()
+            return StopResult(
+                outcome=StopOutcome.STOPPED,
+                inspection=ready,
+                value={"messages": [SimpleNamespace(content="terminated")]},
+            )
+
+        prompt_session = SimpleNamespace(
+            prompt_async=AsyncMock(side_effect=["queue this", "/stop"])
+        )
+        application = SimpleNamespace(
+            continuation=SimpleNamespace(execute=execute, stop=stop),
+        )
+        runtime = SimpleNamespace(session=SimpleNamespace(thread_id="thread-1"))
+        output = io.StringIO()
+
+        with patch("sys.stdout", output):
+            value, final_inspection = await _execute_with_live_hitl(
+                application=application,
+                runtime=runtime,
+                request=SimpleNamespace(action=ContinuationAction.START_TURN),
+                prompt_session=prompt_session,
+            )
+
+        self.assertEqual(stop_calls, ["thread-1"])
+        self.assertEqual(value["messages"][-1].content, "terminated")
+        self.assertEqual(final_inspection.status, ContinuationStatus.READY)
+        self.assertIn("not queued", output.getvalue())
+        self.assertIn("waiting for it to settle", output.getvalue())
+        self.assertIn("stopped safely", output.getvalue())
 
 
 if __name__ == "__main__":

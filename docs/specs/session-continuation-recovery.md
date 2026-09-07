@@ -9,8 +9,39 @@ https://github.com/wukaihang10/langchain_agent/issues/1
 > accepts ordinary `CONTINUE`, which generates an auditable error `ToolMessage`
 > for every replay-unsafe call without executing it, then returns control to the
 > Agent. The Agent can verify external state, report uncertainty, or propose a
-> new call through the normal permission policy. Statements below that say
+> new call through the normal permission policy. Issue #6 adds process-local
+> active-turn cancellation through `/stop`; it composes cancellation with the
+> termination behavior described here. Statements below that say
 > `OUTCOME_UNKNOWN` has no action describe issue #1's historical baseline.
+
+## Active-turn stop
+
+`SessionContinuation.execute()` schedules and registers one process-local
+invocation Task per LangGraph thread before awaiting it. `stop(thread_id)`
+publishes one shared stop-finalization Task, requests cooperative cancellation,
+awaits the original invocation's cleanup, and only then reinspects the latest
+checkpoint. The registry is an in-memory cancellation handle, not a second
+durable run-state model; LangGraph checkpoints remain the sole durable truth.
+
+If the post-cancellation checkpoint is `EMPTY` or `READY`, no recovery
+invocation is required. `WAITING_HUMAN`, `RESUMABLE`, and `OUTCOME_UNKNOWN` are
+drained through the existing guarded `TERMINATE_TURN` implementation.
+`NEEDS_REPAIR` remains fail-closed. This preserves tool-call-ID pairing,
+rejected HITL actions, completed sibling results, and the distinction between
+replay-safe `cancelled` results and potentially side-effecting
+`outcome_unknown` results.
+
+The CLI concurrently schedules the Application execution and a running-state
+prompt. Only `/stop` is accepted while a turn is active; ordinary text and
+other commands are rejected rather than queued. When execution wins the race,
+the prompt Task is cancelled and awaited before the Agent result is rendered.
+When `/stop` wins, the CLI calls the Application Interface by thread identity
+and never manipulates the Agent Task or raw checkpoint itself.
+
+This capability stops only the local orchestration Task. It cannot forcibly
+kill synchronous worker threads, child processes, provider requests, or remote
+side effects, and it does not imply rollback, compensation, cross-process
+cancellation, or exactly-once execution.
 
 ## Problem Statement
 

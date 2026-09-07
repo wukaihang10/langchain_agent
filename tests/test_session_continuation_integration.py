@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,9 +17,13 @@ from langchain_agent.app.session_continuation import (
     ContinuationRequest,
     ContinuationStatus,
     SessionContinuation,
+    StopOutcome,
 )
 from langchain_agent.app.context import AgentContext
-from langchain_agent.harness.middleware.turn_recovery import TurnRecoveryMiddleware
+from langchain_agent.harness.middleware.turn_recovery import (
+    TurnRecoveryMiddleware,
+    TurnRecoveryMode,
+)
 from langchain_agent.harness.permissions.models import (
     ToolCategory,
     ToolPolicy,
@@ -224,6 +229,28 @@ def recovery_agent(checkpointer, responses, tools):
         context_schema=AgentContext,
         checkpointer=checkpointer,
     )
+
+
+class BlockingInvocationAgent:
+    def __init__(self, delegate):
+        self.delegate = delegate
+        self.started = asyncio.Event()
+
+    async def aget_state(self, config):
+        return await self.delegate.aget_state(config)
+
+    async def ainvoke(self, input_value, *, config, context):
+        if (
+            context.turn_recovery is not None
+            and context.turn_recovery.mode == TurnRecoveryMode.TERMINATE
+        ):
+            return await self.delegate.ainvoke(
+                input_value,
+                config=config,
+                context=context,
+            )
+        self.started.set()
+        await asyncio.Future()
 
 
 def agent_runtime(session, root):
@@ -1132,6 +1159,111 @@ class DurableSessionContinuationTests(unittest.IsolatedAsyncioTestCase):
                         "name"
                     ],
                     write_note.name,
+                )
+
+    async def test_active_stop_drains_latest_sqlite_checkpoint_and_reopens_ready(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoint_path = root / "checkpoints.sqlite"
+            store = SessionStore(root / "sessions.json")
+            session = store.create(name="active-stop", repository_path=str(root))
+            run_config = {"configurable": {"thread_id": session.thread_id}}
+            TOOL_BEHAVIOR["fail_unsafe"] = True
+            unsafe_call = AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": uncertain_create.name,
+                        "args": {"name": "external-item"},
+                        "id": "unsafe-id",
+                    }
+                ],
+            )
+
+            async with open_checkpointer(checkpoint_path) as checkpointer:
+                seed_agent = recovery_agent(
+                    checkpointer,
+                    [unsafe_call],
+                    [uncertain_create],
+                )
+                with self.assertRaisesRegex(ConnectionError, "create disconnected"):
+                    await seed_agent.ainvoke(
+                        {"messages": [HumanMessage(content="create it")]},
+                        config=run_config,
+                        context=agent_runtime(session, root).context,
+                    )
+
+            unsafe_calls_before_stop = TOOL_BEHAVIOR["unsafe_calls"]
+            async with open_checkpointer(checkpoint_path) as checkpointer:
+                model = CountingToolCallingFakeModel(
+                    responses=[AIMessage(content="must not run")]
+                )
+                delegate = create_agent(
+                    model=model,
+                    tools=[uncertain_create],
+                    middleware=[TurnRecoveryMiddleware()],
+                    context_schema=AgentContext,
+                    checkpointer=checkpointer,
+                )
+                agent = BlockingInvocationAgent(delegate)
+                continuation = SessionContinuation(
+                    agent=agent,
+                    policy_registry=ToolPolicyRegistry(
+                        {uncertain_create.name: UNSAFE_POLICY}
+                    ),
+                    session_store=store,
+                )
+                active_runtime = agent_runtime(session, root)
+                inspection = await continuation.inspect(active_runtime)
+                self.assertEqual(
+                    inspection.status,
+                    ContinuationStatus.OUTCOME_UNKNOWN,
+                )
+
+                execution = asyncio.create_task(
+                    continuation.execute(
+                        active_runtime,
+                        ContinuationRequest(
+                            action=ContinuationAction.CONTINUE,
+                            observed_checkpoint_id=inspection.checkpoint_id,
+                        ),
+                    )
+                )
+                await agent.started.wait()
+                stop_result = await continuation.stop(session.thread_id)
+                execution_result = await execution
+
+                self.assertEqual(stop_result.outcome, StopOutcome.STOPPED)
+                self.assertEqual(
+                    stop_result.inspection.status,
+                    ContinuationStatus.READY,
+                )
+                self.assertEqual(execution_result.value, stop_result.value)
+                self.assertEqual(
+                    TOOL_BEHAVIOR["unsafe_calls"],
+                    unsafe_calls_before_stop,
+                )
+                self.assertEqual(model.calls, 0)
+                recovered = next(
+                    message
+                    for message in stop_result.value["messages"]
+                    if isinstance(message, ToolMessage)
+                    and message.tool_call_id == "unsafe-id"
+                )
+                self.assertEqual(
+                    recovered.additional_kwargs["recovery"]["outcome"],
+                    "outcome_unknown",
+                )
+
+            async with open_checkpointer(checkpoint_path) as checkpointer:
+                reopened = recovery_agent(checkpointer, [], [])
+                final = await reopened.aget_state(run_config)
+                self.assertFalse(final.next)
+                self.assertEqual(
+                    final.values["messages"][-1].additional_kwargs["recovery"][
+                        "action"
+                    ],
+                    "TERMINATE_TURN",
                 )
 
 

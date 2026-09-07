@@ -17,7 +17,7 @@ from langchain_agent.integrations.mcp.client import (
     MCPIntegration,
     load_mcp_integration,
 )
-from langchain_agent.integrations.mcp.config import load_mcp_config
+from langchain_agent.integrations.mcp.config import load_mcp_config, MCPConfig
 from langchain_agent.integrations.model import create_model
 from langchain_agent.persistence.checkpoints import open_checkpointer
 from langchain_agent.persistence.sessions import SessionStore
@@ -67,7 +67,8 @@ async def bootstrap_application(
         ),
     )
 
-    mcp_config = load_mcp_config(config.paths.mcp_config_path)
+    # mcp_config = load_mcp_config(config.paths.mcp_config_path)
+    mcp_config = MCPConfig(servers={}, tool_policies={})
     mcp = await load_mcp_integration(mcp_config)
     policy_registry = build_tool_policy_registry(
         local_tools=NATIVE_TOOLS,
@@ -76,10 +77,10 @@ async def bootstrap_application(
 
     async with open_checkpointer(config.paths.checkpoint_path) as checkpointer:
         agent = build_agent(
-            model=create_model(),
-            summary_model=create_model(),
-            researcher_model=create_model(),
-            reviewer_model=create_model(),
+            model=create_model(thinking=False),
+            summary_model=create_model(thinking=False),
+            researcher_model=create_model(thinking=False),
+            reviewer_model=create_model(thinking=False),
             native_tools=NATIVE_TOOLS,
             mcp_tools=mcp.tools,
             policy_registry=policy_registry,
@@ -92,12 +93,15 @@ async def bootstrap_application(
             session_store=session_store,
         )
 
-        yield Application(
-            agent=agent,
-            checkpointer=checkpointer,
-            session_store=session_store,
-            repository_knowledge=repository_knowledge,
-            mcp=mcp,
-            config=config,
-            continuation=continuation,
-        )
+        try:
+            yield Application(
+                agent=agent,
+                checkpointer=checkpointer,
+                session_store=session_store,
+                repository_knowledge=repository_knowledge,
+                mcp=mcp,
+                config=config,
+                continuation=continuation,
+            )
+        finally:
+            await continuation.aclose()

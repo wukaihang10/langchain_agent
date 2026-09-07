@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -76,6 +77,20 @@ class ContinuationResult:
     inspection: ContinuationInspection
 
 
+class StopOutcome(StrEnum):
+    STOPPED = "STOPPED"
+    COMPLETED_BEFORE_STOP = "COMPLETED_BEFORE_STOP"
+    NOT_RUNNING = "NOT_RUNNING"
+    NEEDS_REPAIR = "NEEDS_REPAIR"
+
+
+@dataclass(frozen=True)
+class StopResult:
+    outcome: StopOutcome
+    inspection: ContinuationInspection | None = None
+    value: Any = None
+
+
 class ContinuationError(RuntimeError):
     """Base error for a rejected continuation request."""
 
@@ -86,6 +101,21 @@ class StaleContinuationError(ContinuationError):
 
 class InvalidContinuationAction(ContinuationError):
     """The requested action is not valid for the current session status."""
+
+
+class ActiveExecutionError(ContinuationError):
+    """The session already has a process-local invocation in progress."""
+
+
+class StopFinalizationError(ContinuationError):
+    """The cancelled invocation could not be drained to a terminal state."""
+
+
+@dataclass
+class _ActiveExecution:
+    runtime: SessionRuntime
+    invocation_task: asyncio.Task[ContinuationResult]
+    stop_task: asyncio.Task[StopResult] | None = None
 
 
 _ALLOWED_ACTIONS = {
@@ -123,6 +153,8 @@ class SessionContinuation:
         self._agent = agent
         self._policy_registry = policy_registry
         self._session_store = session_store
+        self._active_executions: dict[str, _ActiveExecution] = {}
+        self._active_lock = asyncio.Lock()
 
     async def inspect(
         self,
@@ -132,6 +164,83 @@ class SessionContinuation:
         return self._classify(snapshot)
 
     async def execute(
+        self,
+        runtime: SessionRuntime,
+        request: ContinuationRequest,
+    ) -> ContinuationResult:
+        thread_id = runtime.session.thread_id
+        async with self._active_lock:
+            if thread_id in self._active_executions:
+                raise ActiveExecutionError(
+                    f"Session {thread_id!r} already has an active execution."
+                )
+            invocation_task = asyncio.create_task(
+                self._execute_once(runtime, request)
+            )
+            execution = _ActiveExecution(
+                runtime=runtime,
+                invocation_task=invocation_task,
+            )
+            self._active_executions[thread_id] = execution
+
+        try:
+            try:
+                return await invocation_task
+            except asyncio.CancelledError:
+                async with self._active_lock:
+                    active = self._active_executions.get(thread_id)
+                    stop_task = (
+                        active.stop_task if active is execution else None
+                    )
+                if stop_task is None:
+                    raise
+                stop_result = await asyncio.shield(stop_task)
+                if stop_result.inspection is None:
+                    raise RuntimeError(
+                        "An active stop completed without a checkpoint inspection."
+                    )
+                return ContinuationResult(
+                    value=stop_result.value,
+                    inspection=stop_result.inspection,
+                )
+        finally:
+            await self._remove_completed_execution(execution)
+
+    async def stop(self, thread_id: str) -> StopResult:
+        """Cooperatively stop this process's active invocation for a thread."""
+        async with self._active_lock:
+            execution = self._active_executions.get(thread_id)
+            if execution is None:
+                return StopResult(StopOutcome.NOT_RUNNING)
+            if execution.stop_task is None:
+                execution.stop_task = asyncio.create_task(
+                    self._stop_active_execution(execution)
+                )
+            stop_task = execution.stop_task
+
+        return await asyncio.shield(stop_task)
+
+    async def aclose(self) -> None:
+        """Cancel process-local work before application-owned resources close."""
+        async with self._active_lock:
+            executions = tuple(self._active_executions.values())
+
+        tasks: set[asyncio.Task[Any]] = set()
+        for execution in executions:
+            if execution.stop_task is not None and not execution.stop_task.done():
+                execution.stop_task.cancel()
+                tasks.add(execution.stop_task)
+            if not execution.invocation_task.done():
+                execution.invocation_task.cancel()
+                tasks.add(execution.invocation_task)
+
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        for execution in executions:
+            await self._remove_execution(execution)
+
+    async def _execute_once(
         self,
         runtime: SessionRuntime,
         request: ContinuationRequest,
@@ -180,6 +289,83 @@ class SessionContinuation:
             value=value,
             inspection=await self.inspect(runtime),
         )
+
+    async def _stop_active_execution(
+        self,
+        execution: _ActiveExecution,
+    ) -> StopResult:
+        try:
+            if execution.invocation_task.done():
+                completed = await execution.invocation_task
+                return StopResult(
+                    StopOutcome.COMPLETED_BEFORE_STOP,
+                    inspection=completed.inspection,
+                    value=completed.value,
+                )
+
+            execution.invocation_task.cancel()
+            try:
+                completed = await execution.invocation_task
+            except asyncio.CancelledError:
+                pass
+            else:
+                return StopResult(
+                    StopOutcome.COMPLETED_BEFORE_STOP,
+                    inspection=completed.inspection,
+                    value=completed.value,
+                )
+
+            latest = await self.inspect(execution.runtime)
+            if latest.status == ContinuationStatus.NEEDS_REPAIR:
+                return StopResult(
+                    StopOutcome.NEEDS_REPAIR,
+                    inspection=latest,
+                )
+            if latest.status in {
+                ContinuationStatus.EMPTY,
+                ContinuationStatus.READY,
+            }:
+                return StopResult(StopOutcome.STOPPED, inspection=latest)
+
+            terminated = await self._execute_once(
+                execution.runtime,
+                ContinuationRequest(
+                    action=ContinuationAction.TERMINATE_TURN,
+                    observed_checkpoint_id=latest.checkpoint_id,
+                ),
+            )
+            if terminated.inspection.status == ContinuationStatus.NEEDS_REPAIR:
+                outcome = StopOutcome.NEEDS_REPAIR
+            elif terminated.inspection.status == ContinuationStatus.READY:
+                outcome = StopOutcome.STOPPED
+            else:
+                raise StopFinalizationError(
+                    "The active invocation stopped, but termination left the "
+                    "session in "
+                    f"{terminated.inspection.status.value}. Inspect the latest "
+                    "checkpoint before continuing."
+                )
+            return StopResult(
+                outcome,
+                inspection=terminated.inspection,
+                value=terminated.value,
+            )
+        finally:
+            await self._remove_execution(execution)
+
+    async def _remove_completed_execution(
+        self,
+        execution: _ActiveExecution,
+    ) -> None:
+        if execution.stop_task is not None and not execution.stop_task.done():
+            return
+        await self._remove_execution(execution)
+
+    async def _remove_execution(self, execution: _ActiveExecution) -> None:
+        thread_id = execution.runtime.session.thread_id
+        async with self._active_lock:
+            if self._active_executions.get(thread_id) is execution:
+                del self._active_executions[thread_id]
 
     def _build_input(
         self,
@@ -316,7 +502,7 @@ class SessionContinuation:
         )
 
         runtime_errors = []
-        if unresolved and not has_tool_continuation_path:
+        if unprotected and not has_tool_continuation_path:
             ids = ", ".join(call.id for call in unresolved)
 
             runtime_errors = [

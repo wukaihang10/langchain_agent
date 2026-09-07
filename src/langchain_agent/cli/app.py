@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import suppress
 from dataclasses import replace
 
 from prompt_toolkit import PromptSession
@@ -34,6 +35,7 @@ from langchain_agent.cli.rendering import (
     render_mcp_tools,
     render_result,
     render_sessions,
+    render_stop_result,
 )
 from langchain_agent.harness.permissions.models import PermissionMode
 
@@ -175,12 +177,14 @@ async def run_cli(application: Application) -> None:
                 continue
 
             try:
-                execution = await application.continuation.execute(
-                    active_runtime,
-                    ContinuationRequest(
+                result, active_inspection = await _execute_with_live_hitl(
+                    application=application,
+                    runtime=active_runtime,
+                    request=ContinuationRequest(
                         action=ContinuationAction.TERMINATE_TURN,
                         observed_checkpoint_id=active_inspection.checkpoint_id,
                     ),
+                    prompt_session=prompt_session,
                 )
             except ContinuationError as exc:
                 print(f"Turn termination rejected: {exc}")
@@ -190,10 +194,31 @@ async def run_cli(application: Application) -> None:
                 render_continuation(active_inspection)
                 continue
 
-            active_inspection = execution.inspection
-            render_result(execution.value)
+            render_result(result)
             if active_inspection.status != ContinuationStatus.READY:
                 render_continuation(active_inspection)
+            continue
+
+        if user_input == "/stop":
+            if active_runtime is None:
+                print("No active turn is running.")
+                continue
+            try:
+                stop_result = await application.continuation.stop(
+                    active_runtime.session.thread_id
+                )
+            except ContinuationError as exc:
+                print(f"Active turn stop failed: {exc}")
+                active_inspection = await application.continuation.inspect(
+                    active_runtime
+                )
+                render_continuation(active_inspection)
+                continue
+            render_stop_result(stop_result)
+            if stop_result.inspection is not None:
+                active_inspection = stop_result.inspection
+                if active_inspection.status != ContinuationStatus.READY:
+                    render_continuation(active_inspection)
             continue
 
         if user_input == "/continue":
@@ -223,6 +248,7 @@ async def run_cli(application: Application) -> None:
                         observed_checkpoint_id=active_inspection.checkpoint_id,
                         decisions=decisions,
                     ),
+                    prompt_session=prompt_session,
                 )
             except ContinuationError as exc:
                 print(f"Continuation rejected: {exc}")
@@ -330,6 +356,7 @@ async def run_cli(application: Application) -> None:
                     observed_checkpoint_id=active_inspection.checkpoint_id,
                     message=user_input,
                 ),
+                prompt_session=prompt_session,
             )
         except ContinuationError as exc:
             print(f"Message rejected: {exc}")
@@ -347,22 +374,93 @@ async def _execute_with_live_hitl(
     application: Application,
     runtime: SessionRuntime,
     request: ContinuationRequest,
+    prompt_session: PromptSession | None = None,
 ) -> tuple[dict, ContinuationInspection]:
-    execution = await application.continuation.execute(runtime, request)
+    execution = await _execute_with_running_prompt(
+        application=application,
+        runtime=runtime,
+        request=request,
+        prompt_session=prompt_session,
+    )
 
     while execution.inspection.status == ContinuationStatus.WAITING_HUMAN:
-        # render_continuation(execution.inspection)
         decisions = collect_hitl_decisions(execution.inspection.interrupts)
-        execution = await application.continuation.execute(
-            runtime,
-            ContinuationRequest(
+        execution = await _execute_with_running_prompt(
+            application=application,
+            runtime=runtime,
+            request=ContinuationRequest(
                 action=ContinuationAction.ANSWER_INTERRUPT,
                 observed_checkpoint_id=execution.inspection.checkpoint_id,
                 decisions=tuple(decisions),
             ),
+            prompt_session=prompt_session,
         )
 
     return execution.value, execution.inspection
+
+
+async def _execute_with_running_prompt(
+    *,
+    application: Application,
+    runtime: SessionRuntime,
+    request: ContinuationRequest,
+    prompt_session: PromptSession | None,
+):
+    if prompt_session is None:
+        return await application.continuation.execute(runtime, request)
+
+    execution_task = asyncio.create_task(
+        application.continuation.execute(runtime, request)
+    )
+    completed_normally = False
+    input_task = None
+    try:
+        while True:
+            input_task = asyncio.create_task(
+                prompt_session.prompt_async(
+                    "\nAgent is running. Enter /stop to cancel> "
+                )
+            )
+            done, _ = await asyncio.wait(
+                {execution_task, input_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if execution_task in done or execution_task.done():
+                if not input_task.done():
+                    input_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await input_task
+                completed_normally = True
+                return await execution_task
+
+            running_input = (await input_task).strip()
+            if running_input != "/stop":
+                print(
+                    "Only /stop is accepted while the Agent is running; "
+                    "that input was rejected and not queued."
+                )
+                continue
+
+            print(
+                "Stop requested; waiting for it to settle before finalizing "
+                "the latest checkpoint."
+            )
+            stop_result = await application.continuation.stop(
+                runtime.session.thread_id
+            )
+            render_stop_result(stop_result)
+            completed_normally = True
+            return await execution_task
+    finally:
+        if input_task is not None and not input_task.done():
+            input_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await input_task
+        if not completed_normally and not execution_task.done():
+            execution_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await execution_task
 
 
 async def main(argv: list[str] | None = None) -> None:
