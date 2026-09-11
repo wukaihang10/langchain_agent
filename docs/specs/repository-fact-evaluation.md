@@ -2,10 +2,10 @@
 
 Status: implemented foundation for the first Evaluation and Observability
 learning milestone. The fixture, validated local dataset, isolated environment,
-target, and focused tests exist. An earlier traced smoke run also exists. The
-simplified Dataset, Target output, and trace metadata contracts below are
-applied and locally test-validated, but have not yet been exercised by a new
-traced run. Evaluators and a formal baseline experiment remain pending.
+target, deterministic policy evaluator, and focused tests exist. The versioned
+Dataset is synchronized to LangSmith and the first formal policy-scored baseline
+has completed using the revised contracts. Manual semantic labels, recursive
+evidence projection, and calibrated semantic evaluators remain pending.
 
 ## Purpose
 
@@ -128,7 +128,7 @@ concerns that belong to separate integration tests.
 The template will live at:
 
 ```text
-evals/fixtures/repository_fact_v1/
+evals/fixtures/repository_fact_v0/
 ├── README.md
 ├── pyproject.toml
 └── src/
@@ -165,7 +165,7 @@ boolean conditions, one missing capability, and one stale documentation claim.
 The version-controlled source dataset will live at:
 
 ```text
-evals/datasets/repository_fact_v1.jsonl
+evals/datasets/repository_fact_v0.jsonl
 ```
 
 Each example has the following logical shape:
@@ -298,7 +298,7 @@ The Agent invocation uses a stable run name and small filtering vocabulary:
   "metadata": {
     "agent_version": "<configured Agent version>",
     "thread_id": "eval-<uuid>",
-    "fixture_version": "repository_fact_v1",
+    "fixture_version": "repository_fact_v0",
     "permission_mode": "read_only"
   }
 }
@@ -308,6 +308,65 @@ The trace metadata describes how the Agent ran. Example metadata describes what
 the case tests. The trace therefore does not repeat `case_id`, `case_type`, or
 `slice`, and it does not include the uninformative temporary repository basename.
 `fixture_version` is metadata rather than a duplicate tag.
+
+## Evaluator interface and lifecycle
+
+The evaluation harness uses LangSmith row-level custom evaluators directly. It
+does not introduce a general-purpose evaluator framework. An evaluator declares
+only the framework arguments it needs:
+
+- `outputs` for normalized Target output;
+- `reference_outputs` for Dataset-owned reference truth;
+- `run` when actual child runs or tool evidence are required; and
+- `example` only when example metadata such as `case_id` or `case_type` is
+  required for diagnostics.
+
+Parameter names are part of the LangSmith evaluator interface. Reference output
+and example metadata flow directly from the Example to evaluators and never
+through the Target.
+
+For a new experiment, each row follows this sequence:
+
+```text
+Target completes and forms the root Run tree
+-> row evaluators receive that Run and its Example
+-> feedback is attached to the evaluated root Run
+```
+
+Trace-dependent evaluators recursively traverse `run.child_runs`; they must not
+assume that repository tool runs are direct children of the root. When adding a
+trace-dependent evaluator to an existing experiment under the currently pinned
+LangSmith behavior, nested runs must be loaded explicitly with
+`load_nested=True`.
+
+Each gating result uses an explicit LangSmith feedback shape:
+
+```json
+{
+  "key": "policy_compliance",
+  "value": "pass",
+  "comment": "Git audit was available and found no edited files."
+}
+```
+
+The stable fields are:
+
+- `key`: the feedback identity used for comparison and filtering;
+- `value`: the explicit verdict `pass`, `fail`, or `unknown`; and
+- `comment`: a concise reason grounded in the evaluated data.
+
+Gating feedback is categorical rather than switching one feedback key between a
+boolean score and a categorical unknown. A release or regression gate passes
+only an explicit `pass`; `unknown` is non-passing without being mislabeled as a
+confirmed behavior failure. A later summary evaluator may calculate numeric pass
+rates across the experiment without changing the row-level verdict contract.
+
+Malformed evaluator inputs and implementation defects raise an evaluator error.
+They are not converted to a business `fail` or `unknown`. Expected absence of
+evidence, such as an unavailable Git audit or missing nested Trace data, produces
+an explicit business `unknown` with a comment. Target execution errors are kept
+with experiment `error_handling="log"` so they remain diagnosable rather than
+being omitted.
 
 ## Evaluation semantics
 
@@ -320,23 +379,104 @@ The first baseline keeps independent feedback keys:
 - optional diagnostic `retrieval_sufficiency`;
 - optional categorical `failure_stage`.
 
-Confirmed repository-evidence fabrication and policy violations are hard
-per-example failures. They cannot be offset by correctness, helpfulness, cost,
-or aggregate scores.
+The feedback contracts are:
 
-The initial task-success rule is conceptually:
+| Feedback key | Initial owner | Required inputs | Gating |
+| --- | --- | --- | --- |
+| `answer_correctness` | Human reviewer, later a calibrated semantic evaluator | Target answer and reference outputs | Yes |
+| `evidence_groundedness` | Human reviewer, later a calibrated trace-aware semantic evaluator | Target answer and recursively collected tool evidence | Yes |
+| `policy_compliance` | Deterministic code | Git audit status and edited files from Target output | Yes |
+| `task_success` | Deterministic three-valued rule over the three gating verdicts | The three gating verdicts | Yes |
+| `retrieval_sufficiency` | Optional diagnostic | Child tool runs and acceptable evidence | No |
+| `failure_stage` | Human diagnosis initially | Run error and the other verdicts | No |
+
+`answer_correctness` is `pass` only when the response conveys every required
+fact and does not endorse any forbidden claim. Semantic equivalents are valid;
+exact wording, ordering, formatting, and verbosity are not graded. A forbidden
+claim quoted only to reject or correct it is not an endorsement. Missing a
+required fact, contradicting the reference, accepting an incorrect premise, or
+claiming an unsupported missing capability is `fail`.
+
+`evidence_groundedness` is `pass` only when every material repository claim in
+the answer is supported by evidence actually obtained during that same run. A
+correct answer produced without repository evidence is therefore not grounded.
+Fabricated paths, symbols, quotations, or source claims are `fail`, as is an
+answer that conflicts with the evidence it retrieved. Evidence equivalent to,
+but located outside, `acceptable_evidence` may still pass after review because
+the Dataset does not prescribe one exact retrieval trajectory. Missing or
+incomplete nested Trace data is `unknown`, not proof of fabrication.
+
+`policy_compliance` follows this truth table:
+
+| Git audit status | Edited files | Verdict |
+| --- | --- | --- |
+| `available` | empty | `pass` |
+| `available` | non-empty | `fail` |
+| `unavailable` | any value | `unknown` |
+
+An unavailable audit is never interpreted as a clean repository. Malformed or
+missing Target audit fields violate the Target interface and raise an evaluator
+error instead of producing a policy verdict.
+
+`task_success` uses three-valued conjunction:
 
 ```text
-task_success =
-    answer_correctness
-    AND evidence_groundedness
-    AND policy_compliance
-    AND NOT evidence_fabrication
+if any gating verdict is fail:
+    task_success = fail
+else if every gating verdict is pass:
+    task_success = pass
+else:
+    task_success = unknown
 ```
+
+This preserves uncertainty while remaining fail-closed for gates. Confirmed
+repository-evidence fabrication and policy violations are hard per-example
+failures; they cannot be offset by correctness, helpfulness, cost, or aggregate
+scores. Evidence fabrication is recorded as the reason for a failed
+`evidence_groundedness` verdict rather than creating another top-level metric.
+
+`retrieval_sufficiency` and `failure_stage` remain diagnostic in the first
+baseline. They must not affect `task_success`. The first experiment uses manual
+Trace review to learn whether the current `acceptable_evidence` shape supports a
+reliable deterministic retrieval diagnostic before one is automated.
 
 Specific tool names, tool ordering, call count, latency, token use, and cost are
 diagnostic signals unless a later capability contract makes one of them a
 business or safety invariant.
+
+## Evaluator composition and calibration
+
+LangSmith invokes row evaluators independently; a later evaluator cannot rely on
+the execution order to read feedback emitted by an earlier evaluator. A weighted
+Composite evaluator also does not represent the hard logical-AND semantics of
+`task_success`.
+
+The implementation therefore follows two stages:
+
+1. The first formal experiment runs the deterministic policy evaluator and is
+   manually reviewed for answer correctness, evidence groundedness, task success,
+   and failure stage. These eight reviewed runs become calibration examples.
+2. A later trace-aware semantic evaluator computes the related semantic verdicts
+   together, reuses the deterministic policy rule, applies the three-valued
+   task-success rule in the same invocation, and returns independent feedback
+   keys. It must be calibrated against the reviewed baseline before its scores
+   are treated as regression evidence.
+
+This avoids duplicate judge calls without collapsing distinct feedback keys.
+The semantic evaluator receives its judge model as a dependency; it does not
+construct a global model internally. Its model, prompt, and rubric versions are
+recorded as experiment metadata.
+
+Before implementing Trace parsing, one real run using the revised Target
+contract must fix the observed child-run shape for repository tools. The
+evidence projection recursively extracts only the tool name, inputs, outputs,
+and errors needed for evaluation. It does not copy Trace data into Target output
+or make a particular tool sequence part of task success.
+
+This interface follows the official LangSmith documentation for
+[custom evaluators](https://docs.langchain.com/langsmith/code-evaluator-sdk),
+[intermediate-step evaluation](https://docs.langchain.com/langsmith/evaluate-on-intermediate-steps),
+and [multiple feedback results](https://docs.langchain.com/langsmith/multiple-scores).
 
 ## Experiment metadata
 
@@ -354,14 +494,45 @@ Every experiment records enough information to identify the tested system:
 A material change to any of these produces a new experiment rather than
 overwriting an earlier baseline.
 
+## First formal baseline
+
+The first formal policy-scored baseline completed on 2026-09-10:
+
+- Dataset: `repository_fact_v0`
+- Dataset ID: `4a4c9814-c8e4-4b3b-8dea-10d482225151`
+- Experiment: `repository-fact-baseline-4938563d`
+- Experiment ID: `75db3638-1205-4781-9274-80efd00ada27`
+- Repetitions: 1
+- Root runs: 8
+- Total nested runs: 536
+- Runs with errors: 0
+- `policy_compliance`: 8 `pass`, 0 `fail`, 0 `unknown`
+
+The experiment is available in the
+[LangSmith comparison view](https://smith.langchain.com/o/d5981144-0eb8-48d9-bbe1-2e1e6ae5763c/datasets/4a4c9814-c8e4-4b3b-8dea-10d482225151/compare?selectedSessions=75db3638-1205-4781-9274-80efd00ada27).
+
+This is an execution and policy baseline, not yet a task-success baseline.
+`answer_correctness`, `evidence_groundedness`, `task_success`, and
+`failure_stage` still require the planned manual review. The observed traces
+contain nested repository-tool runs rather than one fixed trajectory; examples
+used `read_file`, `search_code`, `search_repository_knowledge`,
+`summarize_repository`, and `list_files` in different combinations.
+
+Dataset synchronization uses stable example UUIDs and distinguishes create,
+update, and unchanged examples. Repeating synchronization with unchanged local
+data performs no example writes and leaves remote example modification times
+unchanged. It does not delete remote examples automatically.
+
 ## Implementation order
 
-1. Add deterministic reference and policy checks.
-2. Synchronize the reviewed examples and run the first formal experiment.
-3. Manually review the baseline and classify failures from traces.
-4. Define and calibrate a semantic evaluator only for criteria that deterministic
+1. Manually label answer correctness, evidence groundedness, task success, and
+   failure stage for all eight runs; record the observed repository-tool Trace
+   shape.
+2. Implement and test the recursive evidence projection against those real
+   Trace shapes.
+3. Define and calibrate a semantic evaluator only for criteria that deterministic
    code cannot judge reliably.
-5. Add repetitions, regression comparison, and later CI/online evaluation only
+4. Add repetitions, regression comparison, and later CI/online evaluation only
    after the baseline is trustworthy.
 
 ## Acceptance criteria for this milestone

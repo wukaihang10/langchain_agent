@@ -84,7 +84,7 @@ class RepositoryFactTargetTests(unittest.IsolatedAsyncioTestCase):
             {
                 "agent_version": "evaluation-test-version",
                 "thread_id": thread_id,
-                "fixture_version": "repository_fact_v1",
+                "fixture_version": "repository_fact_v0",
                 "permission_mode": "read_only",
             },
         )

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 REPOSITORY_FACT_DATASET_PATH = (
-    Path(__file__).resolve().parent / "repository_fact_v1.jsonl"
+    Path(__file__).resolve().parent / "repository_fact_v0.jsonl"
 )
 CASE_ID_PATTERN = re.compile(r"repository_fact_[0-9]{3}\Z")
 

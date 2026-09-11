@@ -42,10 +42,9 @@ def build_session_runtime(
             "thread_id": session.thread_id,
         },
         "run_name": config.agent_version,
-        "tags": list(config.run_tags),
+        "tags": list(config.invoke_config_tags),
         "metadata": {
             "agent_version": config.agent_version,
-            "thread_id": session.thread_id,
             "repository": resolved_path.name,
             "permission_mode": config.permission_mode.value,
         },

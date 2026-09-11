@@ -24,7 +24,7 @@ from langchain_agent.repository_knowledge import (
     RepositoryKnowledgeConfig,
 )
 
-FIXTURE_VERSION = "repository_fact_v1"
+FIXTURE_VERSION = "repository_fact_v0"
 FIXTURE_TEMPLATE = Path(__file__).resolve().parents[1] / "fixtures" / FIXTURE_VERSION
 
 
@@ -59,7 +59,7 @@ async def open_repository_fact_environment(
     if not template.is_dir():
         raise NotADirectoryError(f"fixture repository does not exist: {template}")
 
-    base_config = config or AppConfig(agent_version="repository-fact-eval-v1")
+    base_config = config or AppConfig(agent_version="langchain-agent-v0")
 
     with tempfile.TemporaryDirectory(prefix="langchain-agent-eval-") as directory:
         environment_root = Path(directory)
@@ -104,7 +104,7 @@ async def open_repository_fact_environment(
             agent=agent,
             context=context,
             config=evaluation_config,
-            fixture_version=FIXTURE_VERSION,
+            fixture_version=FIXTURE_VERSION.replace("_", "-"),
         )
 
         yield RepositoryFactEnvironment(

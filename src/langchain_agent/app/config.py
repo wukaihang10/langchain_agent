@@ -72,18 +72,11 @@ class AppPaths:
 class AppConfig:
     permission_mode: PermissionMode = PermissionMode.DEFAULT
     paths: AppPaths = field(default_factory=AppPaths.user_default)
-    agent_version: str = "langgraph-agent-v0"
-    agent_name: str = "create-agent-runtime-demo"
+    agent_version: str = "langchain-agent-v0"
+    invoke_config_tags: tuple[str, ...] = ("langchain-agent", "local")
+    agent_name: str = "langchain-agent"
     embedding_model_name: str = "BAAI/bge-small-zh-v1.5"
     retrieval_mode: RetrievalMode = "fast"
     max_query_rewrites: int = 2
     summarization_trigger_tokens: int = 30_000
     summarization_keep_tokens: int = 8_000
-
-    @property
-    def run_tags(self) -> tuple[str, ...]:
-        return (
-            "langgraph-agent",
-            "v0",
-            "local",
-        )

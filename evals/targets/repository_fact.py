@@ -33,7 +33,7 @@ class RepositoryFactTarget:
     agent: AgentInvoker
     context: AgentContext
     config: AppConfig
-    fixture_version: str = "repository_fact_v1"
+    fixture_version: str
 
     def __post_init__(self) -> None:
         if self.context.permission_mode is not PermissionMode.READ_ONLY:
@@ -53,10 +53,9 @@ class RepositoryFactTarget:
                 "thread_id": thread_id,
             },
             "run_name": "repository_fact_target",
-            "tags": ["evaluation", "repository_fact"],
+            "tags": ["langchain-agent", "evaluation", "repository_fact"],
             "metadata": {
                 "agent_version": self.config.agent_version,
-                "thread_id": thread_id,
                 "fixture_version": self.fixture_version,
                 "permission_mode": self.context.permission_mode.value,
             },
