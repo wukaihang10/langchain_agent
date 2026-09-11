@@ -46,6 +46,7 @@ class RepositoryFactTargetTests(unittest.IsolatedAsyncioTestCase):
             agent=agent or RecordingAgent(),
             context=context,
             config=config,
+            fixture_version="repository-fact-v0",
         )
 
     async def test_invokes_agent_with_only_question_and_normalizes_output(self):
@@ -76,15 +77,13 @@ class RepositoryFactTargetTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             agent.calls[0]["config"]["tags"],
-            ["evaluation", "repository_fact"],
+            ["langchain-agent", "evaluation", "repository_fact"],
         )
-        thread_id = agent.calls[0]["config"]["configurable"]["thread_id"]
         self.assertEqual(
             agent.calls[0]["config"]["metadata"],
             {
                 "agent_version": "evaluation-test-version",
-                "thread_id": thread_id,
-                "fixture_version": "repository_fact_v0",
+                "fixture_version": "repository-fact-v0",
                 "permission_mode": "read_only",
             },
         )
@@ -156,6 +155,7 @@ class RepositoryFactTargetTests(unittest.IsolatedAsyncioTestCase):
                 agent=RecordingAgent(),
                 context=context,
                 config=AppConfig(),
+                fixture_version="repository-fact-v0",
             )
 
 

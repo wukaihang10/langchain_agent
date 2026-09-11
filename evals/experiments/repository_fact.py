@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
-import platform
-import subprocess
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -185,40 +182,16 @@ def _remote_example_matches(
 def _experiment_metadata(config: AppConfig) -> dict[str, Any]:
     return {
         "agent_version": config.agent_version,
-        "agent_source_sha256": _agent_source_sha256(),
-        "repository_git_revision": _git_output("rev-parse", "HEAD"),
-        "repository_git_dirty": bool(_git_output("status", "--porcelain")),
         "model_name": os.environ["MODEL_NAME"],
         "model_thinking": False,
         "model_temperature": 0,
         "fixture_version": FIXTURE_VERSION,
-        "dataset_version": DATASET_NAME,
+        "dataset_name": DATASET_NAME,
         "evaluator_version": POLICY_EVALUATOR_VERSION,
         "permission_mode": "read_only",
         "num_repetitions": 1,
         "execution_environment": "local",
-        "python_version": platform.python_version(),
     }
-
-
-def _agent_source_sha256() -> str:
-    source_path = PROJECT_ROOT / "src" / "langchain_agent" / "app" / "agent.py"
-    return hashlib.sha256(source_path.read_bytes()).hexdigest()
-
-
-def _git_output(*arguments: str) -> str:
-    completed = subprocess.run(
-        ["git", *arguments],
-        cwd=PROJECT_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    if completed.returncode != 0:
-        detail = completed.stderr.strip() or completed.stdout.strip()
-        raise RuntimeError(f"Could not read repository Git state: {detail}")
-    return completed.stdout.strip()
 
 
 def main() -> None:

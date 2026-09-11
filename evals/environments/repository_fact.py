@@ -24,8 +24,9 @@ from langchain_agent.repository_knowledge import (
     RepositoryKnowledgeConfig,
 )
 
-FIXTURE_VERSION = "repository_fact_v0"
-FIXTURE_TEMPLATE = Path(__file__).resolve().parents[1] / "fixtures" / FIXTURE_VERSION
+FIXTURE_VERSION = "repository-fact-v0"
+FIXTURE_DIRECTORY = "repository_fact_v0"
+FIXTURE_TEMPLATE = Path(__file__).resolve().parents[1] / "fixtures" / FIXTURE_DIRECTORY
 
 
 @dataclass(frozen=True)
@@ -104,7 +105,7 @@ async def open_repository_fact_environment(
             agent=agent,
             context=context,
             config=evaluation_config,
-            fixture_version=FIXTURE_VERSION.replace("_", "-"),
+            fixture_version=FIXTURE_VERSION,
         )
 
         yield RepositoryFactEnvironment(

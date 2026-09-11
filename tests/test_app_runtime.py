@@ -61,7 +61,7 @@ class RepositoryKnowledgeProviderTests(unittest.TestCase):
 
 
 class SessionRuntimeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_runtime_preserves_thread_metadata_and_permission_mode(self):
+    async def test_runtime_separates_thread_configuration_from_trace_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repository = root / "repository"
@@ -82,6 +82,9 @@ class SessionRuntimeTests(unittest.IsolatedAsyncioTestCase):
             config = AppConfig(
                 permission_mode=PermissionMode.READ_ONLY,
                 paths=AppPaths.under(root / ".agent"),
+                agent_name="test-agent",
+                agent_version="test-agent-v7",
+                invoke_config_tags=("test-agent", "test"),
             )
 
             runtime = build_session_runtime(
@@ -103,9 +106,18 @@ class SessionRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 runtime.invoke_config["configurable"]["thread_id"],
                 session.thread_id,
             )
+            self.assertEqual(runtime.invoke_config["run_name"], "test-agent")
             self.assertEqual(
-                runtime.invoke_config["metadata"]["permission_mode"],
-                "read_only",
+                runtime.invoke_config["tags"],
+                ["test-agent", "test"],
+            )
+            self.assertEqual(
+                runtime.invoke_config["metadata"],
+                {
+                    "agent_version": "test-agent-v7",
+                    "repository": "repository",
+                    "permission_mode": "read_only",
+                },
             )
             self.assertEqual(provider.repository_path, repository.resolve())
             self.assertEqual(

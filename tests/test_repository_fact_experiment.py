@@ -1,7 +1,9 @@
 import inspect
+import os
+import platform
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call, patch
 from uuid import uuid4
 
 from langsmith.utils import LangSmithNotFoundError
@@ -9,8 +11,10 @@ from langsmith.utils import LangSmithNotFoundError
 from evals.experiments.repository_fact import (
     DATASET_NAME,
     _as_async_target,
+    _experiment_metadata,
     sync_repository_fact_dataset,
 )
+from langchain_agent.app.config import AppConfig
 
 
 class RepositoryFactDatasetSyncTests(unittest.TestCase):

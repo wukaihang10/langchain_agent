@@ -1,10 +1,9 @@
 # Repository-Fact Evaluation Baseline
 
-Status: implemented foundation for the first Evaluation and Observability
-learning milestone. The fixture, validated local dataset, isolated environment,
-target, deterministic policy evaluator, and focused tests exist. The versioned
-Dataset is synchronized to LangSmith and the first formal policy-scored baseline
-has completed using the revised contracts. Manual semantic labels, recursive
+Status: the first formal policy-scored baseline completed on 2026-09-10 under
+the original `v1` artifact identifiers. The source now uses the locally
+test-validated `v0` naming contract for the next run, but it has not yet produced
+a new LangSmith Dataset or Experiment. Manual semantic labels, recursive
 evidence projection, and calibrated semantic evaluators remain pending.
 
 ## Purpose
@@ -243,6 +242,10 @@ result, target trace, and nested Agent trace. Explicitly copying `case_id` into
 run metadata should be reconsidered only if independent trace search by case ID
 becomes a concrete requirement.
 
+The invocation `thread_id` is a LangGraph checkpoint and continuation key. It is
+placed under `configurable`, not duplicated in user-authored trace metadata.
+LangSmith may still expose framework-provided thread information on the Run.
+
 ## Initial cases
 
 The first dataset contains eight manually reviewed examples:
@@ -294,11 +297,10 @@ The Agent invocation uses a stable run name and small filtering vocabulary:
 ```json
 {
   "run_name": "repository_fact_target",
-  "tags": ["evaluation", "repository_fact"],
+  "tags": ["langchain-agent", "evaluation", "repository_fact"],
   "metadata": {
     "agent_version": "<configured Agent version>",
-    "thread_id": "eval-<uuid>",
-    "fixture_version": "repository_fact_v0",
+    "fixture_version": "repository-fact-v0",
     "permission_mode": "read_only"
   }
 }
@@ -308,6 +310,20 @@ The trace metadata describes how the Agent ran. Example metadata describes what
 the case tests. The trace therefore does not repeat `case_id`, `case_type`, or
 `slice`, and it does not include the uninformative temporary repository basename.
 `fixture_version` is metadata rather than a duplicate tag.
+
+The observability fields have separate jobs:
+
+- `run_name` identifies the operation being traced and remains stable across
+  implementation versions;
+- tags are a small, low-cardinality filtering vocabulary for the application,
+  evaluation context, and capability slice; and
+- metadata carries exact comparison dimensions such as Agent, fixture, and
+  permission versions or modes.
+
+`agent_name` names the compiled production Agent, while `agent_version` names
+the behavior/configuration revision being evaluated. A version must not be used
+as a substitute for every other artifact version: the Agent, Dataset, fixture,
+and evaluator evolve independently.
 
 ## Evaluator interface and lifecycle
 
@@ -482,26 +498,40 @@ and [multiple feedback results](https://docs.langchain.com/langsmith/multiple-sc
 
 Every experiment records enough information to identify the tested system:
 
-- Agent and prompt version;
-- repository Git revision;
+- configured Agent version;
+- repository Git revision and dirty state;
 - model name and relevant configuration;
-- fixture and dataset versions;
-- evaluator/rubric version;
+- fixture version;
+- evaluator or rubric version;
 - permission mode;
 - repetition count; and
 - execution environment.
+
+LangSmith owns the Dataset identity and the immutable Dataset version used by an
+Experiment. Custom metadata must not reuse the reserved `dataset_version` key
+for a human-readable Dataset name because the SDK may replace it with the actual
+LangSmith Dataset version. If an additional label becomes necessary, use an
+unambiguous key such as `dataset_name` or `dataset_contract_version`.
+
+The SDK also records Git provenance. Additional source hashes are useful only
+when they identify the complete behavior-changing artifact; hashing one source
+file must not be presented as full Agent reproducibility.
 
 A material change to any of these produces a new experiment rather than
 overwriting an earlier baseline.
 
 ## First formal baseline
 
-The first formal policy-scored baseline completed on 2026-09-10:
+The first formal policy-scored baseline completed on 2026-09-10 before the
+subsequent naming cleanup:
 
-- Dataset: `repository_fact_v0`
+- Dataset: `repository_fact_v1`
 - Dataset ID: `4a4c9814-c8e4-4b3b-8dea-10d482225151`
 - Experiment: `repository-fact-baseline-4938563d`
 - Experiment ID: `75db3638-1205-4781-9274-80efd00ada27`
+- Agent version: `repository-fact-eval-v1`
+- Fixture version: `repository_fact_v1`
+- Evaluator version: `policy-compliance-v1`
 - Repetitions: 1
 - Root runs: 8
 - Total nested runs: 536
@@ -522,6 +552,11 @@ Dataset synchronization uses stable example UUIDs and distinguishes create,
 update, and unchanged examples. Repeating synchronization with unchanged local
 data performs no example writes and leaves remote example modification times
 unchanged. It does not delete remote examples automatically.
+
+The current source-level names `langchain-agent-v0`, `repository-fact-v0`, and
+`policy-compliance-v0` describe the next contract. They do not
+retroactively rename this historical Dataset or Experiment. A new successful
+Experiment is required before a `v0` result can be recorded as a baseline.
 
 ## Implementation order
 
