@@ -58,6 +58,12 @@ evidence_groundedness:
 
 Give a concise evidence-based comment for each verdict.
 """
+_STRUCTURED_OUTPUT_RETRY_MESSAGE = """\
+Your previous tool call could not be parsed. Call RepositoryFactJudgment again
+with exactly two named properties: answer_correctness and
+evidence_groundedness. Return no prose outside the tool call.
+"""
+_MAX_JUDGE_ATTEMPTS = 2
 
 
 class RepositoryFactEvaluatorError(RuntimeError):
@@ -168,22 +174,10 @@ def build_repository_fact_semantic_evaluator(
             ),
         ]
 
-        try:
-            result = await structured_model.ainvoke(
-                messages,
-                config={
-                    "run_name": "repository_fact_semantic_judge",
-                    "tags": ["evaluation", "judge", "repository_fact"],
-                },
-            )
-        except (AssertionError, TypeError):
-            raise
-        except Exception as error:
-            raise RepositoryFactEvaluatorError(
-                "The repository-fact judge request failed"
-            ) from error
-
-        judgment = _read_judgment(result)
+        judgment = await _invoke_judge(
+            structured_model=structured_model,
+            messages=messages,
+        )
         trace_status = payload["trace"]["status"]
         groundedness_value: Verdict = judgment.evidence_groundedness.verdict
         groundedness_comment = judgment.evidence_groundedness.comment
@@ -232,6 +226,42 @@ def build_repository_fact_semantic_evaluator(
         }
 
     return evaluate_repository_fact_semantics
+
+
+async def _invoke_judge(
+    *,
+    structured_model: Any,
+    messages: list[tuple[str, str]],
+) -> RepositoryFactJudgment:
+    attempt_messages = messages
+    for attempt in range(1, _MAX_JUDGE_ATTEMPTS + 1):
+        try:
+            result = await structured_model.ainvoke(
+                attempt_messages,
+                config={
+                    "run_name": "repository_fact_semantic_judge",
+                    "tags": ["evaluation", "judge", "repository_fact"],
+                    "metadata": {"judge_attempt": attempt},
+                },
+            )
+        except (AssertionError, TypeError):
+            raise
+        except Exception as error:
+            raise RepositoryFactEvaluatorError(
+                "The repository-fact judge request failed"
+            ) from error
+
+        try:
+            return _read_judgment(result)
+        except RepositoryFactEvaluatorError:
+            if attempt == _MAX_JUDGE_ATTEMPTS or not isinstance(result, Mapping):
+                raise
+            attempt_messages = [
+                *messages,
+                ("human", _STRUCTURED_OUTPUT_RETRY_MESSAGE),
+            ]
+
+    raise AssertionError("judge attempt loop ended without a result")
 
 
 def _judge_payload(
@@ -322,9 +352,11 @@ def _read_judgment(result: Any) -> RepositoryFactJudgment:
 
     parsing_error = result.get("parsing_error")
     if parsing_error is not None:
-        error = RepositoryFactEvaluatorError(
-            "The repository-fact judge returned invalid structured output"
-        )
+        diagnostic = _invalid_tool_call_diagnostic(result)
+        message = "The repository-fact judge returned invalid structured output"
+        if diagnostic:
+            message = f"{message}: {diagnostic}"
+        error = RepositoryFactEvaluatorError(message)
         if isinstance(parsing_error, BaseException):
             raise error from parsing_error
         raise error
@@ -332,9 +364,36 @@ def _read_judgment(result: Any) -> RepositoryFactJudgment:
     try:
         return RepositoryFactJudgment.model_validate(result.get("parsed"))
     except ValidationError as error:
+        diagnostic = _invalid_tool_call_diagnostic(result)
+        if diagnostic:
+            raise RepositoryFactEvaluatorError(
+                "The repository-fact judge returned invalid structured output: "
+                f"{diagnostic}"
+            ) from error
         raise RepositoryFactEvaluatorError(
             "The repository-fact judge returned no valid parsed judgment"
         ) from error
+
+
+def _invalid_tool_call_diagnostic(result: Mapping[str, Any]) -> str | None:
+    raw = result.get("raw")
+    invalid_tool_calls = getattr(raw, "invalid_tool_calls", None)
+    if not isinstance(invalid_tool_calls, list) or not invalid_tool_calls:
+        return None
+
+    summary = f"{len(invalid_tool_calls)} invalid tool call(s)"
+    first_call = invalid_tool_calls[0]
+    if not isinstance(first_call, Mapping):
+        return summary
+
+    error = first_call.get("error")
+    if not isinstance(error, str) or "Received " not in error:
+        return summary
+
+    parser_error = error.rsplit("Received ", maxsplit=1)[1].splitlines()[0].strip()
+    if not parser_error:
+        return summary
+    return f"{summary}: {parser_error[:300]}"
 
 
 def _task_success(

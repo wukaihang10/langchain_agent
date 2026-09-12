@@ -1,5 +1,6 @@
 import unittest
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 from langsmith import schemas
@@ -24,23 +25,28 @@ REFERENCE_OUTPUTS = {
 
 
 class FakeStructuredModel:
-    def __init__(self, response=None, error=None):
+    def __init__(self, response=None, error=None, responses=None):
         self.response = response
+        self.responses = list(responses or [])
         self.error = error
         self.messages = None
         self.config = None
+        self.invocations = []
 
     async def ainvoke(self, messages, config=None):
         self.messages = messages
         self.config = config
+        self.invocations.append({"messages": messages, "config": config})
         if self.error is not None:
             raise self.error
+        if self.responses:
+            return self.responses.pop(0)
         return self.response
 
 
 class FakeChatModel:
-    def __init__(self, response=None, error=None):
-        self.structured_model = FakeStructuredModel(response, error)
+    def __init__(self, response=None, error=None, responses=None):
+        self.structured_model = FakeStructuredModel(response, error, responses)
         self.schema = None
         self.include_raw = None
 
@@ -105,6 +111,24 @@ def judge_response(
     }
 
 
+def invalid_tool_call_response():
+    return {
+        "raw": SimpleNamespace(
+            invalid_tool_calls=[
+                {
+                    "error": (
+                        "Function RepositoryFactJudgment arguments are not valid "
+                        "JSON. Received JSONDecodeError Expecting property name "
+                        "enclosed in double quotes: line 1 column 278 (char 277)"
+                    ),
+                }
+            ]
+        ),
+        "parsed": None,
+        "parsing_error": None,
+    }
+
+
 def target_outputs(*, edited_files=None, audit_status="available"):
     return {
         "answer": "当前运行默认最多尝试 4 次。",
@@ -147,6 +171,7 @@ class RepositoryFactSemanticEvaluatorTests(unittest.IsolatedAsyncioTestCase):
             model.structured_model.config["tags"],
             ["evaluation", "judge", "repository_fact"],
         )
+        self.assertEqual(len(model.structured_model.invocations), 1)
 
     async def test_judge_payload_excludes_calibration_answers(self):
         model = FakeChatModel(judge_response())
@@ -262,11 +287,55 @@ class RepositoryFactSemanticEvaluatorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(raised.exception.__cause__, parsing_error)
 
+    async def test_retries_once_after_an_invalid_tool_call(self):
+        model = FakeChatModel(
+            responses=[invalid_tool_call_response(), judge_response()]
+        )
+        evaluator = build_repository_fact_semantic_evaluator(model=model)
+
+        results = await evaluator(
+            inputs={"question": "question"},
+            outputs=target_outputs(),
+            reference_outputs=REFERENCE_OUTPUTS,
+            run=make_root(),
+        )
+
+        feedback = feedback_by_key(results)
+        self.assertEqual(feedback["task_success"].value, "pass")
+        self.assertEqual(len(model.structured_model.invocations), 2)
+        retry_messages = model.structured_model.invocations[1]["messages"]
+        self.assertIn("could not be parsed", retry_messages[-1][1].lower())
+        self.assertEqual(
+            [
+                invocation["config"]["metadata"]["judge_attempt"]
+                for invocation in model.structured_model.invocations
+            ],
+            [1, 2],
+        )
+
+    async def test_second_invalid_tool_call_reports_the_parser_diagnostic(self):
+        model = FakeChatModel(
+            responses=[invalid_tool_call_response(), invalid_tool_call_response()]
+        )
+        evaluator = build_repository_fact_semantic_evaluator(model=model)
+
+        with self.assertRaisesRegex(
+            RepositoryFactEvaluatorError,
+            "JSONDecodeError.*column 278",
+        ):
+            await evaluator(
+                inputs={"question": "question"},
+                outputs=target_outputs(),
+                reference_outputs=REFERENCE_OUTPUTS,
+                run=make_root(),
+            )
+
+        self.assertEqual(len(model.structured_model.invocations), 2)
+
     async def test_provider_failure_is_an_evaluator_error(self):
         provider_error = RuntimeError("provider unavailable")
-        evaluator = build_repository_fact_semantic_evaluator(
-            model=FakeChatModel(error=provider_error)
-        )
+        model = FakeChatModel(error=provider_error)
+        evaluator = build_repository_fact_semantic_evaluator(model=model)
 
         with self.assertRaises(RepositoryFactEvaluatorError) as raised:
             await evaluator(
@@ -277,6 +346,7 @@ class RepositoryFactSemanticEvaluatorTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIs(raised.exception.__cause__, provider_error)
+        self.assertEqual(len(model.structured_model.invocations), 1)
 
 
 if __name__ == "__main__":

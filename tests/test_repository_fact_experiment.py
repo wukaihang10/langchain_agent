@@ -11,6 +11,8 @@ from evals.experiments.repository_fact import (
     DATASET_NAME,
     _as_async_target,
     _experiment_metadata,
+    _parse_args,
+    run_repository_fact_baseline,
     sync_repository_fact_dataset,
 )
 from langchain_agent.app.config import AppConfig
@@ -154,13 +156,36 @@ class RepositoryFactExperimentMetadataTests(unittest.TestCase):
                 "model_temperature": 0,
                 "fixture_version": "repository-fact-v0",
                 "dataset_name": DATASET_NAME,
-                "evaluator_version": "repository-fact-evaluator-v0",
+                "evaluator_version": "repository-fact-evaluator-v1",
                 "permission_mode": "read_only",
                 "num_repetitions": 1,
                 "execution_environment": "local",
             },
         )
         self.assertNotIn("dataset_version", metadata)
+
+    @patch.dict(os.environ, {"MODEL_NAME": "test-model"})
+    def test_records_configured_repetitions(self):
+        metadata = _experiment_metadata(
+            AppConfig(agent_version="test-agent-v7"),
+            num_repetitions=3,
+        )
+
+        self.assertEqual(metadata["num_repetitions"], 3)
+
+
+class RepositoryFactExperimentCliTests(unittest.TestCase):
+    def test_defaults_to_one_repetition(self):
+        self.assertEqual(_parse_args([]).repetitions, 1)
+
+    def test_accepts_an_explicit_positive_repetition_count(self):
+        self.assertEqual(_parse_args(["--repetitions", "3"]).repetitions, 3)
+
+
+class RepositoryFactExperimentConfigurationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rejects_non_positive_repetitions_before_setup(self):
+        with self.assertRaisesRegex(ValueError, "at least 1"):
+            await run_repository_fact_baseline(num_repetitions=0)
 
 
 if __name__ == "__main__":

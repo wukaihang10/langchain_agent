@@ -1,10 +1,9 @@
 # Repository-Fact Evaluation Baseline
 
-Status: the original `v1` policy baseline completed on 2026-09-10, and the
-renamed `v0` policy baseline completed on 2026-09-11 using the locally validated
-contract below. The `v0` manual semantic labels, recursive evidence projection,
-and first calibrated semantic evaluator are complete. A clean Experiment using
-the full evaluator bundle remains pending.
+Status: the original `v1` policy baseline completed on 2026-09-10, the renamed
+`v0` policy baseline completed on 2026-09-11, and the clean automated `v0`
+baseline using the complete evaluator bundle completed on 2026-09-12. The next
+step is a repeated-run stability Experiment before candidate comparisons.
 
 ## Purpose
 
@@ -545,6 +544,17 @@ depending on evaluator execution order. The semantic evaluator receives its
 judge model as a dependency; it does not construct a global model internally.
 Its model and evaluator-bundle version are recorded as experiment metadata.
 
+The first structured-output failure is retried once inside the semantic
+evaluator. The retry adds a trusted instruction to emit both required judgment
+properties and records `judge_attempt=2` on the judge Trace. Normal semantic
+verdicts and provider exceptions are not retried at this layer. A second invalid
+result remains an evaluator error; it is never repaired heuristically or mapped
+to a business `fail` or `unknown`. Safe parser details from
+`raw.invalid_tool_calls` are retained in that final error without copying the
+complete model response. This bounded-retry behavior is evaluator bundle
+`repository-fact-evaluator-v1`; the rubric and feedback keys remain unchanged
+from `v0`.
+
 The evidence projection was verified against all eight v0 root Runs: it retained
 48 tool Runs across five tool names while keeping every Trace `available`. It
 recursively extracts only the tool name, inputs, outputs, and errors needed for
@@ -737,6 +747,53 @@ all eleven synthetic branches matched their human labels. An unavailable Trace
 is deterministically forced to `unknown`; a partial Trace preserves the judge's
 calibrated `pass`, `fail`, or `unknown` sufficiency decision.
 
+## Automated v0 baseline
+
+The first clean Experiment using the complete evaluator bundle completed on
+2026-09-12:
+
+- Dataset: `repository-fact-v0`
+- Dataset ID: `182c5b98-0c39-4ea2-8b4e-b101b75fde5d`
+- Experiment: `repository-fact-baseline-173a79c7`
+- Experiment ID: `930d9486-c9eb-44a9-86ad-0f8419be29fc`
+- Git revision: `e06a765`
+- Agent version: `langchain-agent-v0`
+- Fixture version: `repository-fact-v0`
+- Evaluator version: `repository-fact-evaluator-v0`
+- Repetitions: 1
+- Root Runs: 8
+- Root Run errors: 0
+- Feedback records: 32
+- `answer_correctness`: 8 `pass`
+- `evidence_groundedness`: 8 `pass`
+- `policy_compliance`: 8 `pass`
+- `task_success`: 8 `pass`
+
+The experiment is available in the
+[LangSmith comparison view](https://smith.langchain.com/o/d5981144-0eb8-48d9-bbe1-2e1e6ae5763c/datasets/182c5b98-0c39-4ea2-8b4e-b101b75fde5d/compare?selectedSessions=930d9486-c9eb-44a9-86ad-0f8419be29fc).
+
+The preceding Experiment `repository-fact-baseline-eb90adf1` is not a model
+regression or a valid baseline. Its eight root Runs completed, and its
+deterministic policy feedback passed, but all semantic feedback was null because
+the Trace adapter accessed `child_run_ids` on the live `RunTree` representation.
+The adapter now supports both live `RunTree` values and historical
+`schemas.Run` values, with a real-`RunTree` regression test.
+
+The Experiment entry point accepts `--repetitions N`, defaults to one, and
+records the selected value in Experiment metadata. Repetition changes sampling
+only; it does not create a new Dataset or change the evaluator contract.
+
+The first three-repetition stability attempt,
+`repository-fact-baseline-91245b45`, ran 24 target rows from dirty revision
+`e06a765-dirty`. All target Runs and deterministic policy evaluations succeeded.
+The semantic judge succeeded for 23 rows, while one repetition of
+`repository_fact_001` produced an invalid tool-call argument object: the second
+judgment object omitted its `evidence_groundedness` property name. That single
+judge failure created three null semantic/task feedback records and is evaluator
+execution evidence rather than an Agent failure. The bounded structured-output
+retry in evaluator `v1` addresses that failure mode; a clean repeated Experiment
+is still required.
+
 ## Implementation order
 
 1. Manually label answer correctness, evidence groundedness, task success, and
@@ -748,8 +805,11 @@ calibrated `pass`, `fail`, or `unknown` sufficiency decision.
 4. Define and calibrate a semantic evaluator only for criteria that
    deterministic code cannot judge reliably. Complete.
 5. Run a clean one-repetition Experiment with the complete evaluator bundle.
-6. Add repetitions, regression comparison, and later CI/online evaluation only
-   after the automated baseline is trustworthy.
+   Complete.
+6. Run a repeated stability Experiment and diagnose any per-case or judge
+   variance before changing Agent behavior.
+7. Add candidate regression comparison and later CI/online evaluation only
+   after the repeated baseline is trustworthy.
 
 ## Acceptance criteria for this milestone
 

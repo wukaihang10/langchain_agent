@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import os
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -39,7 +40,7 @@ from langchain_agent.repository_knowledge.embedding import (
 
 DATASET_NAME = "repository-fact-v0"
 EXPERIMENT_PREFIX = "repository-fact-baseline"
-EVALUATOR_VERSION = "repository-fact-evaluator-v0"
+EVALUATOR_VERSION = "repository-fact-evaluator-v1"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -99,8 +100,11 @@ def sync_repository_fact_dataset(client: Client) -> schemas.Dataset:
     return dataset
 
 
-async def run_repository_fact_baseline() -> str:
+async def run_repository_fact_baseline(*, num_repetitions: int = 1) -> str:
     """Synchronize the Dataset and run the repository-fact evaluator bundle."""
+
+    if num_repetitions < 1:
+        raise ValueError("num_repetitions must be at least 1")
 
     paths = AppPaths.user_default()
     load_dotenv(paths.environment_path, override=False)
@@ -134,14 +138,17 @@ async def run_repository_fact_baseline() -> str:
             _as_async_target(environment.target),
             data=dataset.id,
             evaluators=[evaluate_policy_compliance, semantic_evaluator],
-            metadata=_experiment_metadata(config),
+            metadata=_experiment_metadata(
+                config,
+                num_repetitions=num_repetitions,
+            ),
             experiment_prefix=EXPERIMENT_PREFIX,
             description=(
                 "Repository-fact baseline with deterministic policy and calibrated "
                 "trace-aware semantic feedback."
             ),
             max_concurrency=1,
-            num_repetitions=1,
+            num_repetitions=num_repetitions,
             error_handling="log",
         )
         await results.wait()
@@ -194,7 +201,11 @@ def _remote_example_matches(
     )
 
 
-def _experiment_metadata(config: AppConfig) -> dict[str, Any]:
+def _experiment_metadata(
+    config: AppConfig,
+    *,
+    num_repetitions: int = 1,
+) -> dict[str, Any]:
     return {
         "agent_version": config.agent_version,
         "model_name": os.environ["MODEL_NAME"],
@@ -204,13 +215,41 @@ def _experiment_metadata(config: AppConfig) -> dict[str, Any]:
         "dataset_name": DATASET_NAME,
         "evaluator_version": EVALUATOR_VERSION,
         "permission_mode": "read_only",
-        "num_repetitions": 1,
+        "num_repetitions": num_repetitions,
         "execution_environment": "local",
     }
 
 
-def main() -> None:
-    experiment_name = asyncio.run(run_repository_fact_baseline())
+def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the repository-fact LangSmith Experiment.",
+    )
+    parser.add_argument(
+        "--repetitions",
+        type=_positive_repetitions,
+        default=1,
+        help="Number of target runs per Dataset example (default: 1).",
+    )
+    return parser.parse_args(argv)
+
+
+def _positive_repetitions(value: str) -> int:
+    try:
+        repetitions = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("repetitions must be an integer") from error
+    if repetitions < 1:
+        raise argparse.ArgumentTypeError("repetitions must be at least 1")
+    return repetitions
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = _parse_args(argv)
+    experiment_name = asyncio.run(
+        run_repository_fact_baseline(
+            num_repetitions=args.repetitions,
+        )
+    )
     print(json.dumps({"experiment": experiment_name}, ensure_ascii=False))
 
 
