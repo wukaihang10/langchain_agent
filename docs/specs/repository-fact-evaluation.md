@@ -352,6 +352,12 @@ without hard-coding a repository-tool allowlist, and orders siblings by
 and keeps tool errors. It does not copy model messages, middleware state, Run
 IDs, timing, token use, or case metadata into the judge context.
 
+The adapter accepts both Run representations used by LangSmith: live
+`aevaluate()` callbacks provide a `RunTree` with attached `child_runs`, while
+historical read APIs provide `schemas.Run` values that may additionally declare
+`child_run_ids`. Missing-declared-child detection applies only when that second
+field exists; a live `RunTree` is traversed through its attached children.
+
 Projection completeness has three states:
 
 | Status | Meaning |

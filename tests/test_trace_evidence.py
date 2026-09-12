@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from langsmith import schemas
+from langsmith.run_trees import RunTree
 
 from evals.evaluators.trace_evidence import project_tool_evidence
 
@@ -41,6 +42,37 @@ def make_run(
 
 
 class ToolEvidenceProjectionTests(unittest.TestCase):
+    def test_projects_live_run_tree_without_declared_child_ids(self):
+        tool = RunTree(
+            name="read_file",
+            run_type="tool",
+            inputs={"file_path": "src/harbor_tasks/config.py"},
+            outputs={"output": "DEFAULT_MAX_ATTEMPTS = 4"},
+        )
+        root = RunTree(
+            name="repository_fact_target",
+            child_runs=[tool],
+        )
+
+        projection = project_tool_evidence(root)
+
+        self.assertEqual(
+            projection,
+            {
+                "status": "available",
+                "evidence": [
+                    {
+                        "tool_name": "read_file",
+                        "inputs": {
+                            "file_path": "src/harbor_tasks/config.py",
+                        },
+                        "output": "DEFAULT_MAX_ATTEMPTS = 4",
+                        "error": None,
+                    }
+                ],
+            },
+        )
+
     def test_recursively_projects_only_tool_runs(self):
         tool = make_run(
             "read_file",

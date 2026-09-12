@@ -6,6 +6,7 @@ from typing import Any, Literal, TypedDict
 from uuid import UUID
 
 from langsmith import schemas
+from langsmith.run_trees import RunTree
 
 TraceEvidenceStatus = Literal["available", "partial", "unavailable"]
 
@@ -39,10 +40,14 @@ class _ProjectionState:
     partial: bool = False
 
 
-def project_tool_evidence(run: schemas.Run | None) -> TraceEvidence:
+def project_tool_evidence(run: schemas.Run | RunTree | None) -> TraceEvidence:
     """Project a loaded LangSmith Run tree into stable tool evidence.
 
-    The root Run must have its nested runs loaded. A missing root or a root with no loaded ``child_runs`` is reported as unavailable rather than as an empty, fully observed Trace.
+    Historical ``schemas.Run`` values may declare child IDs separately from
+    their loaded children. Live evaluation callbacks instead receive a
+    ``RunTree``, which exposes only the children already attached to the tree.
+    A missing root or a historical root with no loaded ``child_runs`` is
+    reported as unavailable rather than as an empty, fully observed Trace.
     """
 
     if run is None or run.child_runs is None:
@@ -57,13 +62,13 @@ def project_tool_evidence(run: schemas.Run | None) -> TraceEvidence:
     return {"status": status, "evidence": state.evidence}
 
 
-def _visit_run(run: schemas.Run, state: _ProjectionState) -> None:
+def _visit_run(run: schemas.Run | RunTree, state: _ProjectionState) -> None:
     if run.id in state.visited_run_ids:
         state.partial = True
         return
 
     state.visited_run_ids.add(run.id)
-    state.declared_child_ids.update(run.child_run_ids or [])
+    state.declared_child_ids.update(getattr(run, "child_run_ids", None) or [])
 
     if run.run_type == "tool":
         _append_tool_evidence(run, state)
@@ -72,7 +77,10 @@ def _visit_run(run: schemas.Run, state: _ProjectionState) -> None:
         _visit_run(child, state)
 
 
-def _append_tool_evidence(run: schemas.Run, state: _ProjectionState) -> None:
+def _append_tool_evidence(
+    run: schemas.Run | RunTree,
+    state: _ProjectionState,
+) -> None:
     output, output_truncated = _bounded_text(_tool_output(run))
     error, error_truncated = _bounded_text(run.error)
     item: ToolEvidence = {
@@ -100,7 +108,7 @@ def _append_tool_evidence(run: schemas.Run, state: _ProjectionState) -> None:
         state.partial = True
 
 
-def _tool_output(run: schemas.Run) -> Any:
+def _tool_output(run: schemas.Run | RunTree) -> Any:
     outputs = run.outputs
     if isinstance(outputs, dict) and "output" in outputs:
         return outputs["output"]
@@ -146,7 +154,7 @@ def _json_value(value: Any) -> Any:
     )
 
 
-def _run_order(run: schemas.Run) -> tuple[int, str, str]:
+def _run_order(run: schemas.Run | RunTree) -> tuple[int, str, str]:
     if run.dotted_order:
         return 0, run.dotted_order, str(run.id)
     return 1, run.start_time.isoformat(), str(run.id)

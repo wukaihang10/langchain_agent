@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 
 from langsmith import schemas
 from langsmith.evaluation import EvaluationResult, EvaluationResults
+from langsmith.run_trees import RunTree
 from pydantic import BaseModel, ConfigDict, StringConstraints, ValidationError
 
 from evals.evaluators.trace_evidence import TraceEvidence, project_tool_evidence
@@ -146,7 +147,7 @@ def build_repository_fact_semantic_evaluator(
         inputs: Mapping[str, Any],
         outputs: Mapping[str, Any],
         reference_outputs: Mapping[str, Any],
-        run: schemas.Run,
+        run: schemas.Run | RunTree,
     ) -> EvaluationResults:
         payload = _judge_payload(
             inputs=inputs,
