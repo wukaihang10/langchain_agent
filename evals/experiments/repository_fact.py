@@ -18,7 +18,10 @@ from evals.environments.repository_fact import (
     RepositoryFactModels,
     open_repository_fact_environment,
 )
-from evals.evaluators.repository_fact import evaluate_policy_compliance
+from evals.evaluators.repository_fact import (
+    build_repository_fact_semantic_evaluator,
+    evaluate_policy_compliance,
+)
 from evals.targets.repository_fact import (
     RepositoryFactTarget,
     RepositoryFactTargetOutput,
@@ -36,7 +39,7 @@ from langchain_agent.repository_knowledge.embedding import (
 
 DATASET_NAME = "repository-fact-v0"
 EXPERIMENT_PREFIX = "repository-fact-baseline"
-POLICY_EVALUATOR_VERSION = "policy-compliance-v0"
+EVALUATOR_VERSION = "repository-fact-evaluator-v0"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -44,6 +47,7 @@ def sync_repository_fact_dataset(client: Client) -> schemas.Dataset:
     """Create or update the versioned LangSmith Dataset without duplicates."""
 
     examples = load_repository_fact_dataset()
+    dataset_created = False
     try:
         dataset = client.read_dataset(dataset_name=DATASET_NAME)
     except LangSmithNotFoundError:
@@ -53,16 +57,23 @@ def sync_repository_fact_dataset(client: Client) -> schemas.Dataset:
                 "Single-turn, read-only repository-fact evaluation fixture v0."
             ),
         )
+        dataset_created = True
 
     desired_examples = [_remote_example(example) for example in examples]
-    desired_ids = [example["id"] for example in desired_examples]
-    existing_examples = {
-        example.id: example
-        for example in client.list_examples(
-            dataset_id=dataset.id,
-            example_ids=desired_ids,
-        )
-    }
+    if dataset_created:
+        existing_examples = {}
+    else:
+        desired_ids = [example["id"] for example in desired_examples]
+        try:
+            existing_examples = {
+                example.id: example
+                for example in client.list_examples(
+                    dataset_id=dataset.id,
+                    example_ids=desired_ids,
+                )
+            }
+        except LangSmithNotFoundError:
+            existing_examples = {}
     examples_to_create = [
         example
         for example in desired_examples
@@ -89,7 +100,7 @@ def sync_repository_fact_dataset(client: Client) -> schemas.Dataset:
 
 
 async def run_repository_fact_baseline() -> str:
-    """Synchronize the Dataset and run the first policy-scored Experiment."""
+    """Synchronize the Dataset and run the repository-fact evaluator bundle."""
 
     paths = AppPaths.user_default()
     load_dotenv(paths.environment_path, override=False)
@@ -107,6 +118,9 @@ async def run_repository_fact_baseline() -> str:
         primary=LLMQueryExpander(model=create_model(thinking=False)),
         fallback=IdentityQueryExpander(),
     )
+    semantic_evaluator = build_repository_fact_semantic_evaluator(
+        model=create_model(thinking=False),
+    )
 
     async with open_repository_fact_environment(
         models=models,
@@ -119,11 +133,12 @@ async def run_repository_fact_baseline() -> str:
         results = await client.aevaluate(
             _as_async_target(environment.target),
             data=dataset.id,
-            evaluators=[evaluate_policy_compliance],
+            evaluators=[evaluate_policy_compliance, semantic_evaluator],
             metadata=_experiment_metadata(config),
             experiment_prefix=EXPERIMENT_PREFIX,
             description=(
-                "First repository-fact baseline with deterministic policy feedback."
+                "Repository-fact baseline with deterministic policy and calibrated "
+                "trace-aware semantic feedback."
             ),
             max_concurrency=1,
             num_repetitions=1,
@@ -187,7 +202,7 @@ def _experiment_metadata(config: AppConfig) -> dict[str, Any]:
         "model_temperature": 0,
         "fixture_version": FIXTURE_VERSION,
         "dataset_name": DATASET_NAME,
-        "evaluator_version": POLICY_EVALUATOR_VERSION,
+        "evaluator_version": EVALUATOR_VERSION,
         "permission_mode": "read_only",
         "num_repetitions": 1,
         "execution_environment": "local",

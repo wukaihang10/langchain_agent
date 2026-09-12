@@ -1,9 +1,8 @@
 import inspect
 import os
-import platform
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, call, patch
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from langsmith.utils import LangSmithNotFoundError
@@ -23,7 +22,7 @@ class RepositoryFactDatasetSyncTests(unittest.TestCase):
         client = Mock()
         client.read_dataset.side_effect = LangSmithNotFoundError("missing")
         client.create_dataset.return_value = dataset
-        client.list_examples.return_value = []
+        client.list_examples.side_effect = LangSmithNotFoundError("Examples not found")
 
         result = sync_repository_fact_dataset(client)
 
@@ -34,6 +33,7 @@ class RepositoryFactDatasetSyncTests(unittest.TestCase):
                 "Single-turn, read-only repository-fact evaluation fixture v0."
             ),
         )
+        client.list_examples.assert_not_called()
         uploaded = client.create_examples.call_args.kwargs["examples"]
         self.assertEqual(len(uploaded), 8)
         self.assertEqual(
@@ -73,6 +73,21 @@ class RepositoryFactDatasetSyncTests(unittest.TestCase):
         second_client.create_dataset.assert_not_called()
         second_client.create_examples.assert_not_called()
         second_client.update_examples.assert_not_called()
+
+    def test_populates_an_existing_dataset_when_example_lookup_returns_not_found(
+        self,
+    ):
+        dataset = SimpleNamespace(id=uuid4())
+        client = Mock()
+        client.read_dataset.return_value = dataset
+        client.list_examples.side_effect = LangSmithNotFoundError("Examples not found")
+
+        result = sync_repository_fact_dataset(client)
+
+        self.assertIs(result, dataset)
+        uploaded = client.create_examples.call_args.kwargs["examples"]
+        self.assertEqual(len(uploaded), 8)
+        client.update_examples.assert_not_called()
 
     def test_updates_only_existing_examples_whose_owned_content_changed(self):
         dataset = SimpleNamespace(id=uuid4())
@@ -123,6 +138,29 @@ class RepositoryFactTargetAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(inspect.iscoroutinefunction(adapter))
         self.assertEqual(target.inputs, [{"question": "What is the policy?"}])
         self.assertEqual(output, {"answer": "ok"})
+
+
+class RepositoryFactExperimentMetadataTests(unittest.TestCase):
+    @patch.dict(os.environ, {"MODEL_NAME": "test-model"})
+    def test_records_the_agreed_experiment_dimensions(self):
+        metadata = _experiment_metadata(AppConfig(agent_version="test-agent-v7"))
+
+        self.assertEqual(
+            metadata,
+            {
+                "agent_version": "test-agent-v7",
+                "model_name": "test-model",
+                "model_thinking": False,
+                "model_temperature": 0,
+                "fixture_version": "repository-fact-v0",
+                "dataset_name": DATASET_NAME,
+                "evaluator_version": "repository-fact-evaluator-v0",
+                "permission_mode": "read_only",
+                "num_repetitions": 1,
+                "execution_environment": "local",
+            },
+        )
+        self.assertNotIn("dataset_version", metadata)
 
 
 if __name__ == "__main__":

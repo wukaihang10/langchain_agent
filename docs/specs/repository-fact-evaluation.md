@@ -1,10 +1,10 @@
 # Repository-Fact Evaluation Baseline
 
-Status: the first formal policy-scored baseline completed on 2026-09-10 under
-the original `v1` artifact identifiers. The source now uses the locally
-test-validated `v0` naming contract for the next run, but it has not yet produced
-a new LangSmith Dataset or Experiment. Manual semantic labels, recursive
-evidence projection, and calibrated semantic evaluators remain pending.
+Status: the original `v1` policy baseline completed on 2026-09-10, and the
+renamed `v0` policy baseline completed on 2026-09-11 using the locally validated
+contract below. The `v0` manual semantic labels, recursive evidence projection,
+and first calibrated semantic evaluator are complete. A clean Experiment using
+the full evaluator bundle remains pending.
 
 ## Purpose
 
@@ -325,6 +325,51 @@ the behavior/configuration revision being evaluated. A version must not be used
 as a substitute for every other artifact version: the Agent, Dataset, fixture,
 and evaluator evolve independently.
 
+### Trace evidence projection
+
+`project_tool_evidence` in `evals/evaluators/trace_evidence.py` is a pure
+structural adapter from a loaded LangSmith Run tree to the stable evaluator
+shape:
+
+```json
+{
+  "status": "available",
+  "evidence": [
+    {
+      "tool_name": "read_file",
+      "inputs": {"file_path": "src/harbor_tasks/config.py"},
+      "output": "DEFAULT_MAX_ATTEMPTS = 4",
+      "error": null
+    }
+  ]
+}
+```
+
+The projection recursively visits nested children, selects `run_type="tool"`
+without hard-coding a repository-tool allowlist, and orders siblings by
+`dotted_order` with a deterministic time-and-ID fallback. It unwraps the common
+`{"output": ...}` tool result, renders structured values as stable JSON text,
+and keeps tool errors. It does not copy model messages, middleware state, Run
+IDs, timing, token use, or case metadata into the judge context.
+
+Projection completeness has three states:
+
+| Status | Meaning |
+| --- | --- |
+| `available` | Nested Runs were loaded and the projection retained all evidence. |
+| `partial` | Declared descendants were missing, duplicate/cyclic nodes were detected, or content exceeded an internal projection budget. |
+| `unavailable` | The root Trace is absent or its root children were not loaded. |
+
+An available empty evidence list means the observed execution obtained no tool
+evidence. An unavailable Trace means the evaluator cannot know whether evidence
+was obtained. A partial projection exposes only an incomplete observation and
+must not be treated as complete merely because some evidence is present.
+
+The adapter limits each output or error to 12,000 characters and the complete
+evidence payload to 60,000 characters. Truncation is marked in the retained text
+and changes the projection status to `partial`. These are internal prompt-safety
+budgets, not Agent behavior or Experiment comparison dimensions.
+
 ## Evaluator interface and lifecycle
 
 The evaluation harness uses LangSmith row-level custom evaluators directly. It
@@ -422,6 +467,17 @@ but located outside, `acceptable_evidence` may still pass after review because
 the Dataset does not prescribe one exact retrieval trajectory. Missing or
 incomplete nested Trace data is `unknown`, not proof of fabrication.
 
+Groundedness judges whether the retrieved evidence is sufficient for the
+material conclusion, not whether the Agent literally opened every repository
+file. An unopened file does not by itself cause `fail` when the relevant
+execution paths were inspected, the material claims are supported, the omitted
+content is not reasonably capable of changing the conclusion, and external
+uncertainty is stated. A claim about the specific contents of an unread source,
+or a conclusion that depends on that source, still fails. General model
+knowledge about what a file such as `pyproject.toml` usually contains is not a
+substitute for run evidence; it is the source's demonstrated irrelevance to the
+material conclusion that permits a pass.
+
 `policy_compliance` follows this truth table:
 
 | Git audit status | Edited files | Verdict |
@@ -467,27 +523,27 @@ the execution order to read feedback emitted by an earlier evaluator. A weighted
 Composite evaluator also does not represent the hard logical-AND semantics of
 `task_success`.
 
-The implementation therefore follows two stages:
+The implementation follows two stages:
 
 1. The first formal experiment runs the deterministic policy evaluator and is
    manually reviewed for answer correctness, evidence groundedness, task success,
    and failure stage. These eight reviewed runs become calibration examples.
-2. A later trace-aware semantic evaluator computes the related semantic verdicts
-   together, reuses the deterministic policy rule, applies the three-valued
-   task-success rule in the same invocation, and returns independent feedback
-   keys. It must be calibrated against the reviewed baseline before its scores
-   are treated as regression evidence.
+2. The trace-aware semantic evaluator computes `answer_correctness` and
+   `evidence_groundedness` in one judge invocation, reuses the deterministic
+   policy rule, applies the three-valued task-success rule in the same evaluator
+   invocation, and returns independent semantic and task feedback keys. The
+   standalone policy evaluator remains the only writer of `policy_compliance`.
 
-This avoids duplicate judge calls without collapsing distinct feedback keys.
-The semantic evaluator receives its judge model as a dependency; it does not
-construct a global model internally. Its model, prompt, and rubric versions are
-recorded as experiment metadata.
+This avoids duplicate judge calls without collapsing distinct feedback keys or
+depending on evaluator execution order. The semantic evaluator receives its
+judge model as a dependency; it does not construct a global model internally.
+Its model and evaluator-bundle version are recorded as experiment metadata.
 
-Before implementing Trace parsing, one real run using the revised Target
-contract must fix the observed child-run shape for repository tools. The
-evidence projection recursively extracts only the tool name, inputs, outputs,
-and errors needed for evaluation. It does not copy Trace data into Target output
-or make a particular tool sequence part of task success.
+The evidence projection was verified against all eight v0 root Runs: it retained
+48 tool Runs across five tool names while keeping every Trace `available`. It
+recursively extracts only the tool name, inputs, outputs, and errors needed for
+evaluation. It does not copy Trace data into Target output or make a particular
+tool sequence part of task success.
 
 This interface follows the official LangSmith documentation for
 [custom evaluators](https://docs.langchain.com/langsmith/code-evaluator-sdk),
@@ -520,7 +576,15 @@ file must not be presented as full Agent reproducibility.
 A material change to any of these produces a new experiment rather than
 overwriting an earlier baseline.
 
-## First formal baseline
+The next full evaluator Experiment uses
+`evaluator_version="repository-fact-evaluator-v0"`. This single bundle version
+identifies the deterministic policy rule, semantic rubric and structured schema,
+and task-success composition together; separate prompt-version metadata is not
+added. The first judge uses the same recorded model configuration as the Agent.
+A distinct `judge_model_name` becomes necessary only when the composition root
+actually injects a different model.
+
+## Historical v1 baseline
 
 The first formal policy-scored baseline completed on 2026-09-10 before the
 subsequent naming cleanup:
@@ -554,21 +618,132 @@ data performs no example writes and leaves remote example modification times
 unchanged. It does not delete remote examples automatically.
 
 The current source-level names `langchain-agent-v0`, `repository-fact-v0`, and
-`policy-compliance-v0` describe the next contract. They do not
-retroactively rename this historical Dataset or Experiment. A new successful
-Experiment is required before a `v0` result can be recorded as a baseline.
+`policy-compliance-v0` do not retroactively rename this historical Dataset or
+Experiment.
+
+## Current v0 policy baseline
+
+The renamed policy-scored baseline completed on 2026-09-11:
+
+- Dataset: `repository-fact-v0`
+- Dataset ID: `182c5b98-0c39-4ea2-8b4e-b101b75fde5d`
+- Experiment: `repository-fact-baseline-a36ce648`
+- Experiment ID: `58613711-f185-4232-bfdc-8c5b0818401c`
+- Agent version: `langchain-agent-v0`
+- Fixture version: `repository-fact-v0`
+- Evaluator version: `policy-compliance-v0`
+- Repetitions: 1
+- Root runs: 8
+- Total runs including roots: 528
+- Runs with errors: 0
+- `policy_compliance`: 8 `pass`, 0 `fail`, 0 `unknown`
+
+The experiment is available in the
+[LangSmith comparison view](https://smith.langchain.com/o/d5981144-0eb8-48d9-bbe1-2e1e6ae5763c/datasets/182c5b98-0c39-4ea2-8b4e-b101b75fde5d/compare?selectedSessions=58613711-f185-4232-bfdc-8c5b0818401c).
+
+LangSmith projected the three Example metadata fields onto each root Run as
+`ls_example_case_id`, `ls_example_case_type`, and `ls_example_slice`. This makes
+case-level Trace filtering available without adding `case_id` to Target inputs
+or manually duplicating Example metadata in the Target trace contract.
+
+The first v0 synchronization attempt created the Dataset but stopped before
+creating Examples because the empty-Dataset Example lookup returned HTTP 404.
+No Experiment was created by that attempt. The synchronization contract now
+treats an Example lookup `LangSmithNotFoundError` as an empty match set after the
+Dataset itself has been resolved, then creates the missing stable-ID Examples.
+
+### Manual review result
+
+The eight v0 root Runs were manually reviewed on 2026-09-11. The review was
+persisted as Run feedback with review version `repository-fact-manual-v0`; it
+did not duplicate or replace the deterministic `policy_compliance` feedback.
+The aggregate result is:
+
+| Feedback key | Result |
+| --- | --- |
+| `answer_correctness` | 8 `pass` |
+| `evidence_groundedness` | 8 `pass` |
+| `policy_compliance` | 8 `pass` |
+| `task_success` | 8 `pass` |
+| `failure_stage` | 8 `none` |
+
+Two passing cases retain calibration notes rather than creating additional
+top-level metrics:
+
+- `repository_fact_003` described a defensive branch too absolutely as
+  unreachable. The imprecision was non-material and did not change the answer's
+  conclusion or conflict with the retrieved evidence.
+- `repository_fact_007` did not open `pyproject.toml` and overstated that every
+  repository file had been read. It still inspected the relevant Python
+  execution paths, supported the rollback conclusion, and bounded uncertainty
+  about external callers. The inspection-scope wording is non-material, so
+  `evidence_groundedness` remains `pass` under the sufficiency rule above.
+
+### Semantic evaluator calibration fixture
+
+The Agent Dataset contains eight real positive Runs, so it cannot by itself
+show that a semantic evaluator distinguishes `pass`, `fail`, and `unknown`. A
+separate evaluator fixture therefore lives at
+`tests/fixtures/evaluators/repository_fact/semantic_v0.jsonl`. It tests the
+evaluator rather than invoking or grading the Agent.
+
+Each calibration case mirrors the stable evaluator boundaries:
+
+- `inputs` contains the original question;
+- `outputs` contains the Target answer;
+- `reference_outputs` contains the required facts, forbidden claims, and
+  acceptable evidence;
+- `trace` contains an explicit availability status and the already-projected
+  tool evidence;
+- `expected_feedback` contains the human labels for `answer_correctness` and
+  `evidence_groundedness`;
+- `metadata` contains only `slice`, `case_type`, and `case_id`; and
+- `rationale` explains the expected labels for calibration failures.
+
+The eleven cases cover a missing required fact, an endorsed forbidden claim,
+an available Trace with no evidence, fabricated evidence, an unavailable
+Trace, a non-material imprecision, an approximate but materially correct source
+location, an answer that conflicts with retrieved evidence, and the three
+`partial` outcomes: sufficient evidence is `pass`, insufficient evidence is
+`unknown`, and directly conflicting evidence is `fail`.
+
+This fixture does not duplicate deterministic judgments. `policy_compliance`
+continues to come from the Git audit, and `task_success` continues to be derived
+from the three gating verdicts. The `failure_stage` vocabulary remains outside
+this first semantic fixture until real Agent failures establish useful stage
+categories rather than synthetic guesses.
+
+### Semantic evaluator calibration result
+
+The first local calibration completed on 2026-09-12 with judge tracing disabled
+and without uploading automatic feedback:
+
+- synthetic semantic cases: 11 of 11 exact matches;
+- manually reviewed v0 root Runs: 8 of 8 exact matches for
+  `answer_correctness`, `evidence_groundedness`, and `task_success`; and
+- the non-material-imprecision decisions for `repository_fact_003` and
+  `repository_fact_007` remained `pass`.
+
+The initial judge attempt returned `unknown` groundedness for the available,
+empty-evidence case. The rubric was clarified so that `unknown` is not valid for
+a complete Trace: insufficient evidence is `fail`. After that rubric correction,
+all eleven synthetic branches matched their human labels. An unavailable Trace
+is deterministically forced to `unknown`; a partial Trace preserves the judge's
+calibrated `pass`, `fail`, or `unknown` sufficiency decision.
 
 ## Implementation order
 
 1. Manually label answer correctness, evidence groundedness, task success, and
-   failure stage for all eight runs; record the observed repository-tool Trace
-   shape.
-2. Implement and test the recursive evidence projection against those real
-   Trace shapes.
-3. Define and calibrate a semantic evaluator only for criteria that deterministic
-   code cannot judge reliably.
-4. Add repetitions, regression comparison, and later CI/online evaluation only
-   after the baseline is trustworthy.
+   failure stage for all eight Runs. Complete.
+2. Establish positive, negative, and unknown semantic evaluator calibration
+   cases without adding them to the Agent Dataset. Complete.
+3. Implement and test the recursive evidence projection against real and
+   synthetic nested Trace shapes. Complete.
+4. Define and calibrate a semantic evaluator only for criteria that
+   deterministic code cannot judge reliably. Complete.
+5. Run a clean one-repetition Experiment with the complete evaluator bundle.
+6. Add repetitions, regression comparison, and later CI/online evaluation only
+   after the automated baseline is trustworthy.
 
 ## Acceptance criteria for this milestone
 
